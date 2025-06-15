@@ -1,4 +1,5 @@
-<?php
+/**
+ * Group and Student<?php
 /**
  * Datenbankfunktionen für "Zeig, was du kannst"
  */
