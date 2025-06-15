@@ -1,5 +1,4 @@
-/**
- * Group and Student<?php
+<?php
 /**
  * Datenbankfunktionen für "Zeig, was du kannst"
  */
@@ -89,19 +88,59 @@ function updateUserPassword($userId, $newPassword) {
  */
 function getAllSchools() {
     $db = getDB();
-    $stmt = $db->prepare("
-        SELECT s.*, 
-               (SELECT COUNT(*) FROM users WHERE school_id = s.id AND user_type = 'lehrer') as teacher_count,
-               (SELECT COUNT(*) FROM students WHERE school_id = s.id) as student_count,
-               (SELECT COUNT(*) FROM classes WHERE school_id = s.id) as class_count,
-               CASE 
+    
+    // Basis-Query
+    $sql = "SELECT s.*";
+    
+    // Teacher count - prüfen ob users Tabelle existiert
+    try {
+        $stmt = $db->prepare("SHOW TABLES LIKE 'users'");
+        $stmt->execute();
+        if ($stmt->rowCount() > 0) {
+            $sql .= ", (SELECT COUNT(*) FROM users WHERE school_id = s.id AND user_type = 'lehrer') as teacher_count";
+        } else {
+            $sql .= ", 0 as teacher_count";
+        }
+    } catch (Exception $e) {
+        $sql .= ", 0 as teacher_count";
+    }
+    
+    // Student count - prüfen ob students Tabelle existiert
+    try {
+        $stmt = $db->prepare("SHOW TABLES LIKE 'students'");
+        $stmt->execute();
+        if ($stmt->rowCount() > 0) {
+            $sql .= ", (SELECT COUNT(*) FROM students WHERE school_id = s.id) as student_count";
+        } else {
+            $sql .= ", 0 as student_count";
+        }
+    } catch (Exception $e) {
+        $sql .= ", 0 as student_count";
+    }
+    
+    // Class count - prüfen ob classes Tabelle existiert
+    try {
+        $stmt = $db->prepare("SHOW TABLES LIKE 'classes'");
+        $stmt->execute();
+        if ($stmt->rowCount() > 0) {
+            $sql .= ", (SELECT COUNT(*) FROM classes WHERE school_id = s.id) as class_count";
+        } else {
+            $sql .= ", 0 as class_count";
+        }
+    } catch (Exception $e) {
+        $sql .= ", 0 as class_count";
+    }
+    
+    // License status
+    $sql .= ", CASE 
                    WHEN s.license_until < CURDATE() THEN 'expired'
                    WHEN s.license_until < DATE_ADD(CURDATE(), INTERVAL 30 DAY) THEN 'expiring'
                    ELSE 'active'
-               END as license_status
-        FROM schools s 
-        ORDER BY s.name ASC
-    ");
+               END as license_status";
+    
+    $sql .= " FROM schools s ORDER BY s.name ASC";
+    
+    $stmt = $db->prepare($sql);
     $stmt->execute();
     return $stmt->fetchAll();
 }
@@ -288,7 +327,20 @@ function getExpiringLicenses($days = 30) {
  */
 function getSchoolClassCount($schoolId) {
     $db = getDB();
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM classes WHERE school_id = ? AND is_active = 1");
+    
+    // Prüfen ob is_active Spalte existiert
+    $whereClause = "school_id = ?";
+    try {
+        $stmt = $db->prepare("SHOW COLUMNS FROM classes LIKE 'is_active'");
+        $stmt->execute();
+        if ($stmt->rowCount() > 0) {
+            $whereClause .= " AND is_active = 1";
+        }
+    } catch (Exception $e) {
+        // Spalte existiert nicht, ignorieren
+    }
+    
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM classes WHERE " . $whereClause);
     $stmt->execute([$schoolId]);
     return $stmt->fetch()['count'];
 }
@@ -303,7 +355,20 @@ function canCreateClass($schoolId) {
 
 function getClassStudentCount($classId) {
     $db = getDB();
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM students WHERE class_id = ? AND is_active = 1");
+    
+    // Prüfen ob is_active Spalte in students existiert
+    $whereClause = "class_id = ?";
+    try {
+        $stmt = $db->prepare("SHOW COLUMNS FROM students LIKE 'is_active'");
+        $stmt->execute();
+        if ($stmt->rowCount() > 0) {
+            $whereClause .= " AND is_active = 1";
+        }
+    } catch (Exception $e) {
+        // Spalte existiert nicht, ignorieren
+    }
+    
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM students WHERE " . $whereClause);
     $stmt->execute([$classId]);
     return $stmt->fetch()['count'];
 }
@@ -343,20 +408,50 @@ function getDashboardStats() {
     $stmt->execute();
     $stats['active_schools'] = $stmt->fetch()['count'];
     
-    // Total classes
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM classes WHERE is_active = 1");
-    $stmt->execute();
-    $stats['total_classes'] = $stmt->fetch()['count'];
+    // Total classes - prüfen ob Tabelle existiert
+    try {
+        $stmt = $db->prepare("SHOW TABLES LIKE 'classes'");
+        $stmt->execute();
+        if ($stmt->rowCount() > 0) {
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM classes");
+            $stmt->execute();
+            $stats['total_classes'] = $stmt->fetch()['count'];
+        } else {
+            $stats['total_classes'] = 0;
+        }
+    } catch (Exception $e) {
+        $stats['total_classes'] = 0;
+    }
     
     // Total users
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM users WHERE is_active = 1");
-    $stmt->execute();
-    $stats['total_users'] = $stmt->fetch()['count'];
+    try {
+        $stmt = $db->prepare("SHOW TABLES LIKE 'users'");
+        $stmt->execute();
+        if ($stmt->rowCount() > 0) {
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM users WHERE is_active = 1");
+            $stmt->execute();
+            $stats['total_users'] = $stmt->fetch()['count'];
+        } else {
+            $stats['total_users'] = 0;
+        }
+    } catch (Exception $e) {
+        $stats['total_users'] = 0;
+    }
     
-    // Total students
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM students WHERE is_active = 1");
-    $stmt->execute();
-    $stats['total_students'] = $stmt->fetch()['count'];
+    // Total students - prüfen ob Tabelle existiert
+    try {
+        $stmt = $db->prepare("SHOW TABLES LIKE 'students'");
+        $stmt->execute();
+        if ($stmt->rowCount() > 0) {
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM students");
+            $stmt->execute();
+            $stats['total_students'] = $stmt->fetch()['count'];
+        } else {
+            $stats['total_students'] = 0;
+        }
+    } catch (Exception $e) {
+        $stats['total_students'] = 0;
+    }
     
     // Expiring licenses
     $stmt = $db->prepare("
@@ -423,13 +518,3 @@ function initializeDatabase() {
     
     return true;
 }
-
-// Initialize database if this file is run directly
-if (basename($_SERVER['PHP_SELF']) === 'db.php') {
-    if (initializeDatabase()) {
-        echo "Datenbank erfolgreich initialisiert. Superadmin erstellt.\n";
-    } else {
-        echo "Fehler bei der Datenbankinitialisierung.\n";
-    }
-}
-?>

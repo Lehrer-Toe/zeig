@@ -1,6 +1,7 @@
 <?php
 /**
  * Hauptkonfigurationsdatei für "Zeig, was du kannst"
+ * Konfiguriert für Root-Installation
  */
 
 // Session Konfiguration
@@ -22,7 +23,7 @@ define('DB_CHARSET', 'utf8mb4');
 // Anwendungs-Konstanten
 define('APP_NAME', 'Zeig, was du kannst!');
 define('APP_VERSION', '1.0.0');
-define('BASE_URL', '/zeig-was-du-kannst');
+define('BASE_URL', ''); // Leer für Root-Installation
 
 // Pfad-Konstanten
 define('ROOT_PATH', __DIR__);
