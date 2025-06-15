@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>500 - Serverfehler</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #0f172a, #1e293b);
+            color: #e2e8f0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .error-container {
+            text-align: center;
+            padding: 2rem;
+            max-width: 600px;
+        }
+
+        .error-code {
+            font-size: 8rem;
+            font-weight: bold;
+            color: #f59e0b;
+            text-shadow: 0 0 30px rgba(245, 158, 11, 0.5);
+            margin-bottom: 1rem;
+            animation: flicker 2s ease-in-out infinite;
+        }
+
+        @keyframes flicker {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+
+        .error-title {
+            font-size: 2rem;
+            margin-bottom: 1rem;
+            color: #cbd5e1;
+        }
+
+        .error-message {
+            font-size: 1.1rem;
+            margin-bottom: 2rem;
+            opacity: 0.8;
+            line-height: 1.6;
+        }
+
+        .error-actions {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 0.75rem 1.5rem;
+            background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+            color: white;
+            text-decoration: none;
+            border-radius: 0.5rem;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .btn:hover {
+            background: linear-gradient(135deg, #1d4ed8, #1e40af);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+        }
+
+        .btn-secondary {
+            background: rgba(100, 116, 139, 0.2);
+            border: 1px solid rgba(100, 116, 139, 0.3);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(100, 116, 139, 0.3);
+        }
+
+        .error-illustration {
+            margin-bottom: 2rem;
+            font-size: 5rem;
+            animation: spin 3s linear infinite;
+        }
+
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        .status-section {
+            margin-top: 3rem;
+            padding: 1.5rem;
+            background: rgba(245, 158, 11, 0.1);
+            border-radius: 1rem;
+            border: 1px solid rgba(245, 158, 11, 0.3);
+        }
+
+        .status-section h3 {
+            color: #fbbf24;
+            margin-bottom: 1rem;
+        }
+
+        .status-section p {
+            color: #fbbf24;
+            opacity: 0.9;
+            margin-bottom: 1rem;
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #f59e0b;
+            animation: blink 1s ease-in-out infinite;
+        }
+
+        .status-dot:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        .status-dot:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+
+        @keyframes blink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0.3; }
+        }
+
+        .help-section {
+            margin-top: 2rem;
+            padding: 1.5rem;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 1rem;
+            border: 1px solid rgba(59, 130, 246, 0.2);
+        }
+
+        .help-section h3 {
+            color: #3b82f6;
+            margin-bottom: 1rem;
+        }
+
+        .help-section ul {
+            text-align: left;
+            list-style: none;
+            padding: 0;
+        }
+
+        .help-section li {
+            margin-bottom: 0.5rem;
+            padding-left: 1.5rem;
+            position: relative;
+        }
+
+        .help-section li::before {
+            content: "⚙️";
+            position: absolute;
+            left: 0;
+        }
+
+        .reload-timer {
+            margin-top: 1rem;
+            font-size: 0.9rem;
+            opacity: 0.7;
+        }
+
+        @media (max-width: 768px) {
+            .error-code {
+                font-size: 6rem;
+            }
+            
+            .error-title {
+                font-size: 1.5rem;
+            }
+            
+            .error-actions {
+                flex-direction: column;
+                align-items: center;
+            }
+            
+            .btn {
+                width: 100%;
+                max-width: 300px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="error-container">
+        <div class="error-illustration">⚙️</div>
+        <div class="error-code">500</div>
+        <h1 class="error-title">Serverfehler</h1>
+        <p class="error-message">
+            Es ist ein unerwarteter Fehler aufgetreten. 
+            Unser Team wurde automatisch benachrichtigt und arbeitet bereits an einer Lösung.
+        </p>
+        
+        <div class="error-actions">
+            <a href="javascript:location.reload()" class="btn">
+                🔄 Seite neu laden
+            </a>
+            <a href="/zeig-was-du-kannst/" class="btn btn-secondary">
+                🏠 Zur Startseite
+            </a>
+        </div>
+
+        <div class="status-section">
+            <h3>🔧 System Status</h3>
+            <p>Unser Team arbeitet an der Behebung des Problems.</p>
+            <div class="status-indicator">
+                <div class="status-dot"></div>
+                <div class="status-dot"></div>
+                <div class="status-dot"></div>
+            </div>
+            <div class="reload-timer">
+                Die Seite lädt sich automatisch in <span id="countdown">30</span> Sekunden neu.
+            </div>
+        </div>
+
+        <div class="help-section">
+            <h3>Was ist passiert?</h3>
+            <ul>
+                <li>Ein interner Serverfehler ist aufgetreten</li>
+                <li>Das Problem wurde automatisch gemeldet</li>
+                <li>Versuchen Sie es in wenigen Minuten erneut</li>
+                <li>Bei anhaltenden Problemen kontaktieren Sie den Support</li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        // Auto-reload countdown
+        let countdown = 30;
+        const countdownElement = document.getElementById('countdown');
+        
+        const timer = setInterval(() => {
+            countdown--;
+            if (countdownElement) {
+                countdownElement.textContent = countdown;
+            }
+            
+            if (countdown <= 0) {
+                clearInterval(timer);
+                location.reload();
+            }
+        }, 1000);
+    </script>
+</body>
+</html>
