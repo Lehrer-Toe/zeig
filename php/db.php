@@ -97,7 +97,7 @@ function getAllSchools() {
         $stmt = $db->prepare("SHOW TABLES LIKE 'users'");
         $stmt->execute();
         if ($stmt->rowCount() > 0) {
-            $sql .= ", (SELECT COUNT(*) FROM users WHERE school_id = s.id AND user_type = 'lehrer') as teacher_count";
+            $sql .= ", (SELECT COUNT(*) FROM users WHERE school_id = s.id AND user_type = 'lehrer' AND is_active = 1) as teacher_count";
         } else {
             $sql .= ", 0 as teacher_count";
         }
@@ -106,11 +106,23 @@ function getAllSchools() {
     }
     
     // Student count - prüfen ob students Tabelle existiert
+    // HIER IST DIE WICHTIGE ÄNDERUNG: nur Schüler aus aktiven Klassen zählen
     try {
         $stmt = $db->prepare("SHOW TABLES LIKE 'students'");
         $stmt->execute();
         if ($stmt->rowCount() > 0) {
-            $sql .= ", (SELECT COUNT(*) FROM students WHERE school_id = s.id) as student_count";
+            // Prüfen ob classes Tabelle is_active hat
+            $stmt = $db->prepare("SHOW COLUMNS FROM classes LIKE 'is_active'");
+            $stmt->execute();
+            if ($stmt->rowCount() > 0) {
+                $sql .= ", (SELECT COUNT(*) FROM students st 
+                           JOIN classes cl ON st.class_id = cl.id 
+                           WHERE st.school_id = s.id 
+                           AND st.is_active = 1 
+                           AND cl.is_active = 1) as student_count";
+            } else {
+                $sql .= ", (SELECT COUNT(*) FROM students WHERE school_id = s.id AND is_active = 1) as student_count";
+            }
         } else {
             $sql .= ", 0 as student_count";
         }
@@ -123,7 +135,14 @@ function getAllSchools() {
         $stmt = $db->prepare("SHOW TABLES LIKE 'classes'");
         $stmt->execute();
         if ($stmt->rowCount() > 0) {
-            $sql .= ", (SELECT COUNT(*) FROM classes WHERE school_id = s.id) as class_count";
+            // Prüfen ob is_active Spalte existiert
+            $stmt = $db->prepare("SHOW COLUMNS FROM classes LIKE 'is_active'");
+            $stmt->execute();
+            if ($stmt->rowCount() > 0) {
+                $sql .= ", (SELECT COUNT(*) FROM classes WHERE school_id = s.id AND is_active = 1) as class_count";
+            } else {
+                $sql .= ", (SELECT COUNT(*) FROM classes WHERE school_id = s.id) as class_count";
+            }
         } else {
             $sql .= ", 0 as class_count";
         }
@@ -413,7 +432,14 @@ function getDashboardStats() {
         $stmt = $db->prepare("SHOW TABLES LIKE 'classes'");
         $stmt->execute();
         if ($stmt->rowCount() > 0) {
-            $stmt = $db->prepare("SELECT COUNT(*) as count FROM classes");
+            // Prüfen ob is_active Spalte existiert
+            $stmt = $db->prepare("SHOW COLUMNS FROM classes LIKE 'is_active'");
+            $stmt->execute();
+            if ($stmt->rowCount() > 0) {
+                $stmt = $db->prepare("SELECT COUNT(*) as count FROM classes WHERE is_active = 1");
+            } else {
+                $stmt = $db->prepare("SELECT COUNT(*) as count FROM classes");
+            }
             $stmt->execute();
             $stats['total_classes'] = $stmt->fetch()['count'];
         } else {
@@ -439,11 +465,25 @@ function getDashboardStats() {
     }
     
     // Total students - prüfen ob Tabelle existiert
+    // HIER IST DIE WICHTIGE ÄNDERUNG: nur Schüler aus aktiven Klassen zählen
     try {
         $stmt = $db->prepare("SHOW TABLES LIKE 'students'");
         $stmt->execute();
         if ($stmt->rowCount() > 0) {
-            $stmt = $db->prepare("SELECT COUNT(*) as count FROM students");
+            // Prüfen ob classes Tabelle is_active hat
+            $stmt = $db->prepare("SHOW COLUMNS FROM classes LIKE 'is_active'");
+            $stmt->execute();
+            if ($stmt->rowCount() > 0) {
+                $stmt = $db->prepare("
+                    SELECT COUNT(*) as count 
+                    FROM students s 
+                    JOIN classes c ON s.class_id = c.id 
+                    WHERE s.is_active = 1 
+                    AND c.is_active = 1
+                ");
+            } else {
+                $stmt = $db->prepare("SELECT COUNT(*) as count FROM students WHERE is_active = 1");
+            }
             $stmt->execute();
             $stats['total_students'] = $stmt->fetch()['count'];
         } else {
