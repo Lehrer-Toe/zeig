@@ -80,6 +80,115 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                 }
                 break;
+
+            case 'upload_students':
+                // Schüler aus Datei hochladen
+                $classId = (int)($_POST['upload_class_id'] ?? 0);
+                $nameFormat = $_POST['name_format'] ?? 'firstname_lastname';
+                
+                if (!$classId) {
+                    $errors[] = 'Bitte wählen Sie eine Klasse aus.';
+                } elseif (!isset($_FILES['student_file']) || $_FILES['student_file']['error'] !== UPLOAD_ERR_OK) {
+                    $errors[] = 'Bitte wählen Sie eine gültige Datei aus.';
+                } else {
+                    $file = $_FILES['student_file'];
+                    $fileName = $file['name'];
+                    $fileTmpName = $file['tmp_name'];
+                    $fileExtension = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
+                    
+                    $allowedExtensions = ['csv', 'txt', 'xlsx', 'xls'];
+                    
+                    if (!in_array($fileExtension, $allowedExtensions)) {
+                        $errors[] = 'Ungültiger Dateityp. Erlaubt: CSV, TXT, Excel (XLSX, XLS)';
+                    } else {
+                        // Datei verarbeiten
+                        $students = [];
+                        
+                        if (in_array($fileExtension, ['csv', 'txt'])) {
+                            // CSV/TXT verarbeiten
+                            $fileContent = file_get_contents($fileTmpName);
+                            $lines = explode("\n", $fileContent);
+                            
+                            foreach ($lines as $line) {
+                                $line = trim($line);
+                                if (empty($line)) continue;
+                                
+                                // Verschiedene Trennzeichen unterstützen
+                                $parts = [];
+                                if (strpos($line, ',') !== false) {
+                                    $parts = explode(',', $line);
+                                } elseif (strpos($line, ';') !== false) {
+                                    $parts = explode(';', $line);
+                                } elseif (strpos($line, "\t") !== false) {
+                                    $parts = explode("\t", $line);
+                                } else {
+                                    $parts = explode(' ', $line, 2);
+                                }
+                                
+                                if (count($parts) >= 2) {
+                                    $part1 = trim($parts[0]);
+                                    $part2 = trim($parts[1]);
+                                    
+                                    if ($nameFormat === 'firstname_lastname') {
+                                        $students[] = ['first_name' => $part1, 'last_name' => $part2];
+                                    } else {
+                                        $students[] = ['first_name' => $part2, 'last_name' => $part1];
+                                    }
+                                } elseif (count($parts) === 1) {
+                                    // Nur ein Name - als Nachname verwenden
+                                    $students[] = ['first_name' => 'Vorname', 'last_name' => trim($parts[0])];
+                                }
+                            }
+                        } elseif (in_array($fileExtension, ['xlsx', 'xls'])) {
+                            // Excel verarbeiten (vereinfacht)
+                            $errors[] = 'Excel-Import wird in einer zukünftigen Version unterstützt. Bitte verwenden Sie CSV/TXT.';
+                        }
+                        
+                        if (!empty($students) && empty($errors)) {
+                            // Schüler in Datenbank einfügen
+                            $db = getDB();
+                            $addedCount = 0;
+                            $skippedCount = 0;
+                            
+                            foreach ($students as $student) {
+                                if (empty($student['first_name']) || empty($student['last_name'])) {
+                                    $skippedCount++;
+                                    continue;
+                                }
+                                
+                                // Prüfen ob Schülerlimit erreicht
+                                $currentCount = getClassStudentCount($classId);
+                                if ($currentCount >= $school['max_students_per_class']) {
+                                    $errors[] = 'Klassenlimit erreicht. Weitere Schüler übersprungen.';
+                                    break;
+                                }
+                                
+                                $stmt = $db->prepare("
+                                    INSERT INTO students (school_id, class_id, first_name, last_name) 
+                                    VALUES (?, ?, ?, ?)
+                                ");
+                                
+                                if ($stmt->execute([$user['school_id'], $classId, $student['first_name'], $student['last_name']])) {
+                                    $addedCount++;
+                                } else {
+                                    $skippedCount++;
+                                }
+                            }
+                            
+                            if ($addedCount > 0) {
+                                $success = $addedCount . ' Schüler erfolgreich hinzugefügt.';
+                                if ($skippedCount > 0) {
+                                    $success .= ' ' . $skippedCount . ' Einträge übersprungen.';
+                                }
+                            } else {
+                                $errors[] = 'Keine Schüler konnten hinzugefügt werden.';
+                            }
+                        } elseif (empty($students)) {
+                            $errors[] = 'Keine gültigen Schülerdaten in der Datei gefunden.';
+                        }
+                    }
+                }
+                break;
                 
             case 'delete_class':
                 $classId = (int)($_POST['class_id'] ?? 0);
@@ -216,6 +325,15 @@ $flashMessage = getFlashMessage();
             background: rgba(100, 116, 139, 0.3);
         }
 
+        .btn-success {
+            background: linear-gradient(135deg, #22c55e, #16a34a);
+            color: white;
+        }
+
+        .btn-success:hover {
+            background: linear-gradient(135deg, #16a34a, #15803d);
+        }
+
         .btn-danger {
             background: linear-gradient(135deg, #ef4444, #dc2626);
             color: white;
@@ -295,6 +413,54 @@ $flashMessage = getFlashMessage();
         .error-list ul {
             color: #fca5a5;
             margin-left: 1.5rem;
+        }
+
+        .upload-section {
+            background: rgba(59, 130, 246, 0.1);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            border-radius: 1rem;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            backdrop-filter: blur(10px);
+        }
+
+        .upload-header {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .upload-header h3 {
+            color: #3b82f6;
+            font-size: 1.3rem;
+        }
+
+        .upload-info {
+            background: rgba(245, 158, 11, 0.1);
+            border: 1px solid rgba(245, 158, 11, 0.3);
+            border-radius: 0.5rem;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .upload-info h4 {
+            color: #fbbf24;
+            margin-bottom: 0.5rem;
+            font-size: 1rem;
+        }
+
+        .upload-info ul {
+            color: #fbbf24;
+            margin-left: 1.5rem;
+            font-size: 0.9rem;
+        }
+
+        .upload-form {
+            display: grid;
+            grid-template-columns: 1fr 1fr auto;
+            gap: 1rem;
+            align-items: end;
         }
 
         .classes-grid {
@@ -459,6 +625,11 @@ $flashMessage = getFlashMessage();
             color: #64748b;
         }
 
+        .form-group select option {
+            background: #1e293b;
+            color: white;
+        }
+
         .form-actions {
             display: flex;
             gap: 1rem;
@@ -478,6 +649,42 @@ $flashMessage = getFlashMessage();
             color: #64748b;
         }
 
+        .file-input-wrapper {
+            position: relative;
+            display: inline-block;
+            width: 100%;
+        }
+
+        .file-input {
+            position: absolute;
+            left: -9999px;
+        }
+
+        .file-input-button {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.75rem 1rem;
+            background: rgba(100, 116, 139, 0.2);
+            border: 1px solid rgba(100, 116, 139, 0.3);
+            border-radius: 0.5rem;
+            color: #cbd5e1;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            width: 100%;
+            justify-content: center;
+        }
+
+        .file-input-button:hover {
+            background: rgba(100, 116, 139, 0.3);
+        }
+
+        .file-selected {
+            color: #3b82f6;
+            font-size: 0.9rem;
+            margin-top: 0.5rem;
+        }
+
         @media (max-width: 768px) {
             .container {
                 padding: 1rem;
@@ -490,6 +697,10 @@ $flashMessage = getFlashMessage();
             .controls {
                 flex-direction: column;
                 align-items: stretch;
+            }
+            
+            .upload-form {
+                grid-template-columns: 1fr;
             }
             
             .modal-content {
@@ -543,12 +754,98 @@ $flashMessage = getFlashMessage();
             </p>
         </div>
 
+        <!-- Neue Klasse anlegen -->
+        <div class="upload-section">
+            <div class="upload-header">
+                <h3>📝 Neue Klasse anlegen</h3>
+            </div>
+            <form method="POST" action="" style="display: grid; grid-template-columns: 1fr 1fr auto; gap: 1rem; align-items: end;">
+                <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
+                <input type="hidden" name="action" value="create_class">
+                
+                <div class="form-group" style="margin-bottom: 0;">
+                    <label>Klassenname (z.B. 9a, 10b)</label>
+                    <input type="text" name="class_name" required placeholder="z.B. 9a, 10b">
+                </div>
+                
+                <div class="form-group" style="margin-bottom: 0;">
+                    <label>Schuljahr</label>
+                    <select name="school_year">
+                        <option value="2025/26">2025/26</option>
+                        <option value="2024/25">2024/25</option>
+                        <option value="2026/27">2026/27</option>
+                    </select>
+                </div>
+                
+                <button type="submit" class="btn btn-success">Klasse anlegen</button>
+            </form>
+        </div>
+
+        <!-- Schüler aus Datei hochladen -->
+        <div class="upload-section">
+            <div class="upload-header">
+                <h3>📁 Schüler aus Datei hochladen</h3>
+            </div>
+            
+            <div class="upload-info">
+                <h4>Unterstützte Formate:</h4>
+                <ul>
+                    <li><strong>CSV/TXT:</strong> Ein Schüler pro Zeile</li>
+                    <li><strong>Excel (XLSX):</strong> Erste Spalte mit Schülernamen</li>
+                </ul>
+                <p style="margin-top: 0.5rem;"><strong>Beispiele:</strong></p>
+                <ul>
+                    <li>Vorname Nachname: "Max Mustermann"</li>
+                    <li>Nachname, Vorname: "Mustermann, Max"</li>
+                </ul>
+            </div>
+
+            <form method="POST" action="" enctype="multipart/form-data" class="upload-form">
+                <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
+                <input type="hidden" name="action" value="upload_students">
+                
+                <div class="form-group" style="margin-bottom: 0;">
+                    <label>Klasse auswählen...</label>
+                    <select name="upload_class_id" required>
+                        <option value="">Klasse auswählen...</option>
+                        <?php foreach ($classes as $class): ?>
+                            <option value="<?php echo $class['id']; ?>">
+                                <?php echo escape($class['name']); ?> 
+                                (<?php echo $class['student_count']; ?>/<?php echo $school['max_students_per_class']; ?> Schüler)
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                
+                <div class="form-group" style="margin-bottom: 0;">
+                    <label>Format</label>
+                    <select name="name_format">
+                        <option value="firstname_lastname">Vorname Nachname</option>
+                        <option value="lastname_firstname">Nachname, Vorname</option>
+                    </select>
+                </div>
+                
+                <div class="form-group" style="margin-bottom: 0;">
+                    <div class="file-input-wrapper">
+                        <input type="file" id="student_file" name="student_file" class="file-input" 
+                               accept=".csv,.txt,.xlsx,.xls" onchange="updateFileName(this)">
+                        <label for="student_file" class="file-input-button">
+                            📁 Datei auswählen
+                        </label>
+                        <div id="file-selected" class="file-selected" style="display: none;"></div>
+                    </div>
+                </div>
+                
+                <button type="submit" class="btn btn-success">Schüler hochladen</button>
+            </form>
+        </div>
+
         <div class="controls">
             <div>
                 <strong><?php echo count($classes); ?></strong> von <strong><?php echo $school['max_classes']; ?></strong> Klassen erstellt
             </div>
-            <button onclick="openCreateClassModal()" class="btn btn-primary">
-                ➕ Neue Klasse
+            <button onclick="openAddStudentModal()" class="btn btn-primary">
+                👤➕ Einzelnen Schüler hinzufügen
             </button>
         </div>
 
@@ -557,9 +854,6 @@ $flashMessage = getFlashMessage();
                 <div class="icon">🏫</div>
                 <h3>Noch keine Klassen erstellt</h3>
                 <p>Erstellen Sie Ihre erste Klasse, um mit der Verwaltung zu beginnen.</p>
-                <button onclick="openCreateClassModal()" class="btn btn-primary" style="margin-top: 1rem;">
-                    ➕ Erste Klasse erstellen
-                </button>
             </div>
         <?php else: ?>
             <div class="classes-grid">
@@ -619,7 +913,7 @@ $flashMessage = getFlashMessage();
                         <?php endif; ?>
 
                         <div class="class-actions">
-                            <button onclick="openAddStudentModal(<?php echo $class['id']; ?>)" 
+                            <button onclick="openAddStudentModalForClass(<?php echo $class['id']; ?>)" 
                                     class="btn btn-primary btn-sm"
                                     <?php echo $class['student_count'] >= $school['max_students_per_class'] ? 'disabled' : ''; ?>>
                                 👤➕ Schüler hinzufügen
@@ -639,41 +933,6 @@ $flashMessage = getFlashMessage();
         <?php endif; ?>
     </div>
 
-    <!-- Modal: Neue Klasse erstellen -->
-    <div id="createClassModal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3 class="modal-title">Neue Klasse erstellen</h3>
-                <span class="close" onclick="closeModal('createClassModal')">&times;</span>
-            </div>
-            <form method="POST" action="">
-                <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
-                <input type="hidden" name="action" value="create_class">
-                
-                <div class="form-group">
-                    <label for="class_name">Klassenname *</label>
-                    <input type="text" id="class_name" name="class_name" required 
-                           placeholder="z.B. 10a, 7. Klasse, Abschlussklasse 2024">
-                </div>
-                
-                <div class="form-group">
-                    <label for="description">Beschreibung</label>
-                    <textarea id="description" name="description" rows="3" 
-                              placeholder="Optionale Beschreibung der Klasse..."></textarea>
-                </div>
-                
-                <div class="form-actions">
-                    <button type="button" onclick="closeModal('createClassModal')" class="btn btn-secondary">
-                        Abbrechen
-                    </button>
-                    <button type="submit" class="btn btn-primary">
-                        Klasse erstellen
-                    </button>
-                </div>
-            </form>
-        </div>
-    </div>
-
     <!-- Modal: Schüler hinzufügen -->
     <div id="addStudentModal" class="modal">
         <div class="modal-content">
@@ -685,6 +944,18 @@ $flashMessage = getFlashMessage();
                 <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
                 <input type="hidden" name="action" value="add_student">
                 <input type="hidden" id="student_class_id" name="class_id" value="">
+                
+                <div class="form-group">
+                    <label for="modal_class_select">Klasse</label>
+                    <select id="modal_class_select" name="class_id" required>
+                        <option value="">Klasse auswählen...</option>
+                        <?php foreach ($classes as $class): ?>
+                            <option value="<?php echo $class['id']; ?>">
+                                <?php echo escape($class['name']); ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
                 
                 <div class="form-group">
                     <label for="first_name">Vorname *</label>
@@ -714,12 +985,23 @@ $flashMessage = getFlashMessage();
     </div>
 
     <script>
-        function openCreateClassModal() {
-            document.getElementById('createClassModal').style.display = 'block';
+        function updateFileName(input) {
+            const fileSelected = document.getElementById('file-selected');
+            if (input.files && input.files[0]) {
+                fileSelected.textContent = '📎 ' + input.files[0].name;
+                fileSelected.style.display = 'block';
+            } else {
+                fileSelected.style.display = 'none';
+            }
         }
 
-        function openAddStudentModal(classId) {
+        function openAddStudentModal() {
+            document.getElementById('addStudentModal').style.display = 'block';
+        }
+
+        function openAddStudentModalForClass(classId) {
             document.getElementById('student_class_id').value = classId;
+            document.getElementById('modal_class_select').value = classId;
             document.getElementById('addStudentModal').style.display = 'block';
         }
 
@@ -772,7 +1054,6 @@ $flashMessage = getFlashMessage();
         }
 
         function viewAllStudents(classId) {
-            // Hier könnte eine detaillierte Schülerübersicht implementiert werden
             alert('Detaillierte Schülerübersicht wird in einer zukünftigen Version implementiert.');
         }
 
