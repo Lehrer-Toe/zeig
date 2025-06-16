@@ -10,7 +10,15 @@ $activeTab = $_GET['tab'] ?? 'klassen';
 
 // Aktionen verarbeiten
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // Error reporting für AJAX-Requests anpassen (keine HTML-Ausgabe)
+    error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE);
+    ini_set('display_errors', 0);
+    
+    // Output buffering starten um unerwünschte Ausgaben zu verhindern
+    ob_start();
+    
     if (!validateCSRFToken($_POST['csrf_token'] ?? '')) {
+        ob_end_clean();
         sendErrorResponse('Sicherheitsfehler.');
     }
     
@@ -67,9 +75,59 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt = $db->prepare($sql);
             
             if ($stmt->execute($insertParams)) {
+                ob_end_clean();
                 sendSuccessResponse('Klasse erfolgreich erstellt.');
             } else {
+                ob_end_clean();
                 sendErrorResponse('Fehler beim Erstellen der Klasse.');
+            }
+            break;
+            
+        case 'update_class':
+            $classId = (int)($_POST['class_id'] ?? 0);
+            $className = trim($_POST['class_name'] ?? '');
+            $schoolYear = $_POST['school_year'] ?? '';
+            
+            if (empty($className)) {
+                sendErrorResponse('Klassenname ist erforderlich.');
+            }
+            
+            $db = getDB();
+            
+            // Prüfen ob Klasse zur Schule gehört
+            $stmt = $db->prepare("SELECT id FROM classes WHERE id = ? AND school_id = ?");
+            $stmt->execute([$classId, $user['school_id']]);
+            if (!$stmt->fetch()) {
+                sendErrorResponse('Klasse nicht gefunden.');
+            }
+            
+            // Prüfen welche Spalten existieren
+            $stmt = $db->prepare("SHOW COLUMNS FROM classes");
+            $stmt->execute();
+            $columns = $stmt->fetchAll(PDO::FETCH_COLUMN);
+            
+            $updateColumns = ['name = ?'];
+            $updateParams = [$className];
+            
+            if (in_array('school_year', $columns)) {
+                $updateColumns[] = 'school_year = ?';
+                $updateParams[] = $schoolYear;
+            }
+            
+            if (in_array('updated_at', $columns)) {
+                $updateColumns[] = 'updated_at = CURRENT_TIMESTAMP';
+            }
+            
+            $updateParams[] = $classId;
+            $updateParams[] = $user['school_id'];
+            
+            $sql = "UPDATE classes SET " . implode(', ', $updateColumns) . " WHERE id = ? AND school_id = ?";
+            $stmt = $db->prepare($sql);
+            
+            if ($stmt->execute($updateParams)) {
+                sendSuccessResponse('Klasse erfolgreich aktualisiert.');
+            } else {
+                sendErrorResponse('Fehler beim Aktualisieren der Klasse.');
             }
             break;
             
@@ -103,10 +161,485 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 sendErrorResponse('Fehler beim Löschen der Klasse.');
             }
             break;
+        
+        case 'get_students':
+            $classId = (int)($_POST['class_id'] ?? 0);
+            
+            // Prüfen ob Klasse zur Schule gehört
+            $db = getDB();
+            $stmt = $db->prepare("SELECT id FROM classes WHERE id = ? AND school_id = ?");
+            $stmt->execute([$classId, $user['school_id']]);
+            if (!$stmt->fetch()) {
+                sendErrorResponse('Klasse nicht gefunden.');
+            }
+            
+            // Schüler laden
+            $students = getClassStudentsSimple($classId);
+            sendSuccessResponse('Schüler geladen.', $students);
+            break;
+            
+        case 'upload_students':
+            // Output buffering um PHP-Warnungen zu verhindern
+            ob_clean();
+            
+            $classId = (int)($_POST['class_id'] ?? 0);
+            $nameFormat = $_POST['name_format'] ?? 'vorname_nachname';
+            
+            if (!$classId) {
+                sendErrorResponse('Bitte wählen Sie eine Klasse aus.');
+            }
+            
+            if (!isset($_FILES['student_file']) || $_FILES['student_file']['error'] !== UPLOAD_ERR_OK) {
+                $uploadError = 'Unbekannter Fehler';
+                if (isset($_FILES['student_file']['error'])) {
+                    switch ($_FILES['student_file']['error']) {
+                        case UPLOAD_ERR_INI_SIZE:
+                        case UPLOAD_ERR_FORM_SIZE:
+                            $uploadError = 'Die Datei ist zu groß.';
+                            break;
+                        case UPLOAD_ERR_PARTIAL:
+                            $uploadError = 'Die Datei wurde nur teilweise hochgeladen.';
+                            break;
+                        case UPLOAD_ERR_NO_FILE:
+                            $uploadError = 'Es wurde keine Datei ausgewählt.';
+                            break;
+                        case UPLOAD_ERR_NO_TMP_DIR:
+                            $uploadError = 'Temporäres Verzeichnis fehlt.';
+                            break;
+                        case UPLOAD_ERR_CANT_WRITE:
+                            $uploadError = 'Datei konnte nicht geschrieben werden.';
+                            break;
+                        case UPLOAD_ERR_EXTENSION:
+                            $uploadError = 'Upload wurde durch eine PHP-Erweiterung gestoppt.';
+                            break;
+                    }
+                }
+                sendErrorResponse('Datei-Upload fehlgeschlagen: ' . $uploadError);
+            }
+            
+            // Prüfen ob Klasse zur Schule gehört
+            $db = getDB();
+            $stmt = $db->prepare("SELECT name FROM classes WHERE id = ? AND school_id = ?");
+            $stmt->execute([$classId, $user['school_id']]);
+            $class = $stmt->fetch();
+            
+            if (!$class) {
+                sendErrorResponse('Klasse nicht gefunden.');
+            }
+            
+            $file = $_FILES['student_file'];
+            $fileName = $file['name'];
+            $tmpName = $file['tmp_name'];
+            $fileSize = $file['size'];
+            $fileExt = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
+            
+            // Debug-Informationen nur in Error-Log
+            error_log("Upload Debug - Filename: $fileName, Size: $fileSize, Extension: $fileExt, TmpName: $tmpName");
+            
+            try {
+                // Students-Tabelle sicherstellen
+                ensureStudentsTable();
+                
+                $students = [];
+                
+                if (in_array($fileExt, ['csv', 'txt'])) {
+                    $students = parseCSVFileSimple($tmpName, $nameFormat);
+                    error_log("Upload Debug - Parsed " . count($students) . " students");
+                } else {
+                    sendErrorResponse('Nicht unterstütztes Dateiformat. Verwenden Sie CSV oder TXT.');
+                }
+                
+                if (empty($students)) {
+                    sendErrorResponse('Keine gültigen Schülerdaten in der Datei gefunden.');
+                }
+                
+                // Schule holen für Limits
+                $school = getSchoolById($user['school_id']);
+                if (!$school) {
+                    sendErrorResponse('Schuldaten konnten nicht geladen werden.');
+                }
+                
+                // Prüfen ob Klassenlimit erreicht wird
+                $currentCount = getCurrentStudentCount($classId);
+                $newTotal = $currentCount + count($students);
+                $maxStudents = $school['max_students_per_class'];
+                
+                error_log("Upload Debug - Current: $currentCount, Adding: " . count($students) . ", Max: $maxStudents");
+                
+                if ($newTotal > $maxStudents) {
+                    sendErrorResponse("Klassenlimit überschritten. Aktuell: {$currentCount}, Hinzufügen: " . count($students) . ", Maximum: {$maxStudents}");
+                }
+                
+                // Schüler einfügen
+                $insertedCount = insertStudentsSimple($classId, $user['school_id'], $students);
+                
+                error_log("Upload Debug - Inserted $insertedCount students");
+                
+                // Erfolgsmeldung mit Details
+                $message = "Erfolgreich {$insertedCount} Schüler in Klasse '{$class['name']}' hinzugefügt.";
+                if ($insertedCount < count($students)) {
+                    $skipped = count($students) - $insertedCount;
+                    $message .= " ({$skipped} übersprungen wegen ungültiger Daten)";
+                }
+                
+                sendSuccessResponse($message);
+                
+            } catch (Exception $e) {
+                error_log("Upload error: " . $e->getMessage() . "\nTrace: " . $e->getTraceAsString());
+                sendErrorResponse('Fehler beim Verarbeiten der Datei: ' . $e->getMessage());
+            }
+            break;
+            
+        case 'add_single_student':
+            $classId = (int)($_POST['class_id'] ?? 0);
+            $firstName = trim($_POST['first_name'] ?? '');
+            $lastName = trim($_POST['last_name'] ?? '');
+            
+            if (!$classId || empty($firstName) || empty($lastName)) {
+                sendErrorResponse('Klasse, Vor- und Nachname sind erforderlich.');
+            }
+            
+            // Prüfen ob Klasse zur Schule gehört
+            $db = getDB();
+            $stmt = $db->prepare("SELECT name FROM classes WHERE id = ? AND school_id = ?");
+            $stmt->execute([$classId, $user['school_id']]);
+            $class = $stmt->fetch();
+            
+            if (!$class) {
+                sendErrorResponse('Klasse nicht gefunden.');
+            }
+            
+            // Schule holen für Limits
+            $school = getSchoolById($user['school_id']);
+            if (!$school) {
+                sendErrorResponse('Schuldaten konnten nicht geladen werden.');
+            }
+            
+            // Prüfen ob Klassenlimit erreicht
+            $currentCount = getCurrentStudentCount($classId);
+            if ($currentCount >= $school['max_students_per_class']) {
+                sendErrorResponse('Maximale Schüleranzahl für diese Klasse erreicht.');
+            }
+            
+            ensureStudentsTable();
+            
+            $students = [['first_name' => $firstName, 'last_name' => $lastName]];
+            $insertedCount = insertStudentsSimple($classId, $user['school_id'], $students);
+            
+            if ($insertedCount > 0) {
+                sendSuccessResponse("Schüler '{$firstName} {$lastName}' erfolgreich hinzugefügt.");
+            } else {
+                sendErrorResponse('Fehler beim Hinzufügen des Schülers.');
+            }
+            break;
+            
+        case 'delete_student':
+            $studentId = (int)($_POST['student_id'] ?? 0);
+            
+            $db = getDB();
+            
+            // Prüfen ob Schüler zur Schule gehört
+            $stmt = $db->prepare("
+                SELECT s.* 
+                FROM students s 
+                JOIN classes c ON s.class_id = c.id 
+                WHERE s.id = ? AND c.school_id = ?
+            ");
+            $stmt->execute([$studentId, $user['school_id']]);
+            
+            if (!$stmt->fetch()) {
+                sendErrorResponse('Schüler nicht gefunden.');
+            }
+            
+            // Prüfen ob is_active Spalte existiert
+            $stmt = $db->prepare("SHOW COLUMNS FROM students LIKE 'is_active'");
+            $stmt->execute();
+            
+            if ($stmt->rowCount() > 0) {
+                // Soft delete
+                $stmt = $db->prepare("UPDATE students SET is_active = 0 WHERE id = ?");
+            } else {
+                // Hard delete
+                $stmt = $db->prepare("DELETE FROM students WHERE id = ?");
+            }
+            
+            if ($stmt->execute([$studentId])) {
+                sendSuccessResponse('Schüler erfolgreich entfernt.');
+            } else {
+                sendErrorResponse('Fehler beim Entfernen des Schülers.');
+            }
+            break;
     }
 }
 
-// Klassen laden
+// Vereinfachte und robuste Hilfsfunktionen
+function ensureStudentsTable() {
+    $db = getDB();
+    
+    try {
+        // Prüfen ob Students-Tabelle existiert
+        $stmt = $db->prepare("SHOW TABLES LIKE 'students'");
+        $stmt->execute();
+        
+        if ($stmt->rowCount() == 0) {
+            // Minimale Tabelle erstellen
+            $sql = "
+                CREATE TABLE students (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    class_id INT NOT NULL,
+                    school_id INT NOT NULL,
+                    first_name VARCHAR(100) NOT NULL,
+                    last_name VARCHAR(100) NOT NULL,
+                    is_active TINYINT(1) DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            ";
+            $db->exec($sql);
+        }
+    } catch (Exception $e) {
+        error_log("Error creating students table: " . $e->getMessage());
+        throw new Exception("Fehler beim Erstellen der Schüler-Tabelle");
+    }
+}
+
+function parseCSVFileSimple($filePath, $nameFormat) {
+    $students = [];
+    
+    if (!file_exists($filePath) || !is_readable($filePath)) {
+        error_log("Parse Debug - File not readable: $filePath");
+        throw new Exception('Datei konnte nicht gelesen werden.');
+    }
+    
+    $content = file_get_contents($filePath);
+    if ($content === false || empty($content)) {
+        error_log("Parse Debug - File empty or unreadable");
+        throw new Exception('Datei ist leer oder konnte nicht gelesen werden.');
+    }
+    
+    error_log("Parse Debug - File size: " . strlen($content) . " bytes");
+    
+    // BOM entfernen falls vorhanden
+    $content = preg_replace('/^\xEF\xBB\xBF/', '', $content);
+    
+    // Zeilen aufteilen
+    $lines = preg_split('/\r\n|\r|\n/', $content);
+    error_log("Parse Debug - Found " . count($lines) . " lines");
+    
+    $lineCount = 0;
+    foreach ($lines as $line) {
+        $line = trim($line);
+        if (empty($line)) continue;
+        
+        $lineCount++;
+        error_log("Parse Debug - Line $lineCount: '$line'");
+        
+        // Wenn die Zeile keine Trennzeichen enthält, nehmen wir die ganze Zeile als Namen
+        if (!strpos($line, ',') && !strpos($line, ';') && !strpos($line, "\t") && !strpos($line, '|')) {
+            // Direkt als Name verwenden
+            $nameData = parseStudentNameSimple($line, $nameFormat);
+            if ($nameData) {
+                error_log("Parse Debug - Direct parse: " . $nameData['first_name'] . " " . $nameData['last_name']);
+                $students[] = $nameData;
+            }
+        } else {
+            // Mit Trennzeichen parsen
+            $possibleDelimiters = [',', ';', "\t", '|'];
+            $maxParts = 0;
+            $bestParts = [];
+            
+            foreach ($possibleDelimiters as $delimiter) {
+                // str_getcsv mit explizitem escape Parameter für PHP 8.4+ Kompatibilität
+                $parts = str_getcsv($line, $delimiter, '"', '\\');
+                if (count($parts) > $maxParts) {
+                    $maxParts = count($parts);
+                    $bestParts = $parts;
+                }
+            }
+            
+            // Ersten Eintrag als Namen verwenden
+            $nameToParse = isset($bestParts[0]) ? trim($bestParts[0]) : $line;
+            $nameData = parseStudentNameSimple($nameToParse, $nameFormat);
+            if ($nameData) {
+                error_log("Parse Debug - CSV parse: " . $nameData['first_name'] . " " . $nameData['last_name']);
+                $students[] = $nameData;
+            } else {
+                error_log("Parse Debug - Failed to parse name from line: '$line'");
+            }
+        }
+    }
+    
+    error_log("Parse Debug - Total students parsed: " . count($students));
+    return $students;
+}
+
+function parseStudentNameSimple($fullName, $format) {
+    $fullName = trim($fullName);
+    
+    if (empty($fullName) || strlen($fullName) < 2) {
+        return null;
+    }
+    
+    // Debug-Ausgabe
+    error_log("Parse Name Debug - Input: '$fullName', Format: $format");
+    
+    // Sonderzeichen entfernen (außer Buchstaben, Leerzeichen, Bindestrich, Komma)
+    $fullName = preg_replace('/[^\p{L}\s\-,\.]/u', '', $fullName);
+    $fullName = trim($fullName);
+    
+    switch ($format) {
+        case 'vorname_nachname':
+            // "Max Mustermann" oder "Max Peter Mustermann"
+            $parts = preg_split('/\s+/', $fullName);
+            if (count($parts) >= 2) {
+                $firstName = $parts[0];
+                $lastName = implode(' ', array_slice($parts, 1));
+                error_log("Parse Name Debug - Parsed as: First='$firstName', Last='$lastName'");
+                return ['first_name' => $firstName, 'last_name' => $lastName];
+            } elseif (count($parts) == 1 && !empty($parts[0])) {
+                // Nur ein Name vorhanden - als Nachname speichern
+                error_log("Parse Name Debug - Single name, using as last name: '$parts[0]'");
+                return ['first_name' => 'Vorname', 'last_name' => $parts[0]];
+            }
+            break;
+            
+        case 'nachname_vorname':
+            // "Mustermann, Max" oder "Mustermann, Max Peter"
+            if (strpos($fullName, ',') !== false) {
+                $parts = array_map('trim', explode(',', $fullName, 2));
+                $lastName = $parts[0];
+                $firstName = isset($parts[1]) ? $parts[1] : '';
+                if (!empty($firstName) && !empty($lastName)) {
+                    error_log("Parse Name Debug - Parsed with comma: First='$firstName', Last='$lastName'");
+                    return ['first_name' => $firstName, 'last_name' => $lastName];
+                }
+            } else {
+                // Fallback: letztes Wort als Nachname
+                $parts = preg_split('/\s+/', $fullName);
+                if (count($parts) >= 2) {
+                    $lastName = array_pop($parts);
+                    $firstName = implode(' ', $parts);
+                    error_log("Parse Name Debug - Parsed without comma: First='$firstName', Last='$lastName'");
+                    return ['first_name' => $firstName, 'last_name' => $lastName];
+                } elseif (count($parts) == 1 && !empty($parts[0])) {
+                    // Nur ein Name vorhanden - als Nachname speichern
+                    error_log("Parse Name Debug - Single name, using as last name: '$parts[0]'");
+                    return ['first_name' => 'Vorname', 'last_name' => $parts[0]];
+                }
+            }
+            break;
+    }
+    
+    // Fallback: Einzelner Name wird als Nachname gespeichert
+    error_log("Parse Name Debug - Fallback: using '$fullName' as last name");
+    return ['first_name' => 'Vorname', 'last_name' => $fullName];
+}
+
+function insertStudentsSimple($classId, $schoolId, $students) {
+    $db = getDB();
+    $insertedCount = 0;
+    
+    try {
+        // Prüfen ob students Tabelle die benötigten Spalten hat
+        $stmt = $db->prepare("SHOW COLUMNS FROM students");
+        $stmt->execute();
+        $columns = $stmt->fetchAll(PDO::FETCH_COLUMN);
+        error_log("Insert Debug - Available columns: " . implode(', ', $columns));
+        
+        // Basis-Insert-Statement
+        $sql = "INSERT INTO students (class_id, school_id, first_name, last_name";
+        $values = "(?, ?, ?, ?";
+        
+        // Optional: is_active wenn vorhanden
+        if (in_array('is_active', $columns)) {
+            $sql .= ", is_active";
+            $values .= ", 1";
+        }
+        
+        // Optional: created_at wenn vorhanden
+        if (in_array('created_at', $columns)) {
+            $sql .= ", created_at";
+            $values .= ", NOW()";
+        }
+        
+        $sql .= ") VALUES " . $values . ")";
+        error_log("Insert Debug - SQL: $sql");
+        
+        $stmt = $db->prepare($sql);
+        
+        foreach ($students as $student) {
+            if (empty($student['first_name']) || empty($student['last_name'])) {
+                error_log("Insert Debug - Skipping empty student");
+                continue;
+            }
+            
+            error_log("Insert Debug - Inserting: " . $student['first_name'] . " " . $student['last_name']);
+            
+            if ($stmt->execute([$classId, $schoolId, $student['first_name'], $student['last_name']])) {
+                $insertedCount++;
+            } else {
+                error_log("Insert Debug - Failed to insert student: " . implode(', ', $stmt->errorInfo()));
+            }
+        }
+        
+        error_log("Insert Debug - Total inserted: $insertedCount");
+        return $insertedCount;
+        
+    } catch (Exception $e) {
+        error_log("Insert Debug - Error: " . $e->getMessage());
+        throw new Exception("Fehler beim Einfügen der Schüler: " . $e->getMessage());
+    }
+}
+
+function getCurrentStudentCount($classId) {
+    $db = getDB();
+    
+    try {
+        // Prüfen ob Students-Tabelle existiert
+        $stmt = $db->prepare("SHOW TABLES LIKE 'students'");
+        $stmt->execute();
+        
+        if ($stmt->rowCount() == 0) {
+            return 0;
+        }
+        
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM students WHERE class_id = ? AND is_active = 1");
+        $stmt->execute([$classId]);
+        $result = $stmt->fetch();
+        return $result ? (int)$result['count'] : 0;
+        
+    } catch (Exception $e) {
+        error_log("Error counting students: " . $e->getMessage());
+        return 0;
+    }
+}
+
+function getClassStudentsSimple($classId) {
+    $db = getDB();
+    
+    try {
+        // Prüfen ob Students-Tabelle existiert
+        $stmt = $db->prepare("SHOW TABLES LIKE 'students'");
+        $stmt->execute();
+        
+        if ($stmt->rowCount() == 0) {
+            return [];
+        }
+        
+        $stmt = $db->prepare("
+            SELECT id, first_name, last_name, created_at 
+            FROM students 
+            WHERE class_id = ? AND is_active = 1 
+            ORDER BY last_name ASC, first_name ASC
+        ");
+        $stmt->execute([$classId]);
+        return $stmt->fetchAll();
+        
+    } catch (Exception $e) {
+        error_log("Error loading students: " . $e->getMessage());
+        return [];
+    }
+}
+
 function getSchoolClasses($schoolId, $classFilter = 'all', $yearFilter = 'all') {
     $db = getDB();
     
@@ -167,7 +700,7 @@ function getSchoolClasses($schoolId, $classFilter = 'all', $yearFilter = 'all') 
         $stmt = $db->prepare("SHOW TABLES LIKE 'students'");
         $stmt->execute();
         if ($stmt->rowCount() > 0) {
-            $sql .= " LEFT JOIN students s ON c.id = s.class_id";
+            $sql .= " LEFT JOIN students s ON c.id = s.class_id AND s.is_active = 1";
         }
     } catch (Exception $e) {
         // Tabelle existiert nicht
@@ -231,6 +764,12 @@ $classes = getSchoolClasses($user['school_id'], $classFilter, $yearFilter);
 $schoolYears = getSchoolYears($user['school_id']);
 $school = getSchoolById($user['school_id']);
 $flashMessage = getFlashMessage();
+
+// Prüfen ob school_year Spalte existiert
+$db = getDB();
+$stmt = $db->prepare("SHOW COLUMNS FROM classes LIKE 'school_year'");
+$stmt->execute();
+$hasSchoolYearColumn = $stmt->rowCount() > 0;
 
 // Aktuelle Schuljahre für Dropdown
 $currentYear = date('Y');
@@ -728,6 +1267,180 @@ $availableYears = [
             color: #3b82f6;
         }
 
+        /* Modal Styles */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 9999;
+            left: 0;
+            top: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(5px);
+            overflow-y: auto;
+        }
+
+        .modal.show {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem;
+        }
+
+        .modal-content {
+            background: linear-gradient(135deg, #0f172a, #1e293b);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            border-radius: 1rem;
+            padding: 2rem;
+            max-width: 90vw;
+            width: 600px;
+            max-height: 80vh;
+            overflow-y: auto;
+            position: relative;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid rgba(59, 130, 246, 0.2);
+        }
+
+        .modal-title {
+            color: #3b82f6;
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin: 0;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            color: #64748b;
+            font-size: 2rem;
+            cursor: pointer;
+            padding: 0.5rem;
+            border-radius: 0.5rem;
+            transition: all 0.3s ease;
+            line-height: 1;
+            width: 3rem;
+            height: 3rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-close:hover {
+            background: rgba(100, 116, 139, 0.2);
+            color: #cbd5e1;
+        }
+
+        .modal-body {
+            margin-bottom: 1.5rem;
+        }
+
+        .modal-actions {
+            display: flex;
+            gap: 1rem;
+            justify-content: flex-end;
+            padding-top: 1rem;
+            border-top: 1px solid rgba(59, 130, 246, 0.2);
+        }
+
+        .student-list {
+            max-height: 300px;
+            overflow-y: auto;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 0.5rem;
+            margin: 1rem 0;
+            border: 1px solid rgba(100, 116, 139, 0.2);
+        }
+
+        .student-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid rgba(100, 116, 139, 0.2);
+        }
+
+        .student-item:last-child {
+            border-bottom: none;
+        }
+
+        .student-item:hover {
+            background: rgba(59, 130, 246, 0.05);
+        }
+
+        .student-name {
+            flex: 1;
+            color: #e2e8f0;
+        }
+
+        .student-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .add-student-form {
+            background: rgba(59, 130, 246, 0.1);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            border-radius: 0.5rem;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .add-student-form h4 {
+            color: #3b82f6;
+            margin-bottom: 1rem;
+            margin-top: 0;
+        }
+
+        .add-student-form .form-row {
+            display: flex;
+            gap: 1rem;
+            align-items: end;
+        }
+
+        .loading {
+            opacity: 0.6;
+            pointer-events: none;
+        }
+
+        /* Überschreibung für bessere Modal-Darstellung */
+        .modal .form-group {
+            margin-bottom: 1rem;
+        }
+
+        .modal .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            color: #cbd5e1;
+            font-weight: 500;
+        }
+
+        .modal .form-group input,
+        .modal .form-group select {
+            width: 100%;
+            padding: 0.75rem;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(100, 116, 139, 0.3);
+            border-radius: 0.5rem;
+            color: white;
+            font-size: 1rem;
+        }
+
+        .modal .form-group input:focus,
+        .modal .form-group select:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        }
+
         @media (max-width: 768px) {
             .container {
                 padding: 1rem;
@@ -916,7 +1629,7 @@ $availableYears = [
                     <h4>Unterstützte Formate:</h4>
                     <ul>
                         <li><strong>CSV/TXT:</strong> Ein Schüler pro Zeile</li>
-                        <li><strong>Excel (XLSX):</strong> Erste Spalte mit Schülernamen</li>
+                        <li><strong>Excel (XLSX):</strong> Erste Spalte mit Schülernamen (noch nicht implementiert)</li>
                     </ul>
                     <div class="examples">
                         <strong>Beispiele:</strong><br>
@@ -931,19 +1644,22 @@ $availableYears = [
                         <select id="uploadClass" name="class_id" required>
                             <option value="">Klasse auswählen...</option>
                             <?php foreach ($classes as $class): ?>
-                                <option value="<?php echo $class['id']; ?>">
+                                <option value="<?php echo $class['id']; ?>" 
+                                        data-current="<?php echo $class['student_count']; ?>"
+                                        data-max="<?php echo $school['max_students_per_class']; ?>">
                                     <?php 
                                     echo escape($class['name']);
                                     if (isset($class['school_year']) && !empty($class['school_year'])) {
                                         echo ' (' . escape($class['school_year']) . ')';
                                     }
+                                    echo ' - ' . $class['student_count'] . '/' . $school['max_students_per_class'] . ' Schüler';
                                     ?>
                                 </option>
                             <?php endforeach; ?>
                         </select>
                     </div>
                     <div class="form-group">
-                        <label for="nameFormat">Format</label>
+                        <label for="nameFormat">Namensformat</label>
                         <select id="nameFormat" name="name_format" required>
                             <option value="vorname_nachname">Vorname Nachname</option>
                             <option value="nachname_vorname">Nachname, Vorname</option>
@@ -952,7 +1668,7 @@ $availableYears = [
                     <div class="form-group">
                         <div class="file-input-wrapper">
                             <input type="file" id="studentFile" name="student_file" 
-                                   class="file-input" accept=".csv,.txt,.xlsx" 
+                                   class="file-input" accept=".csv,.txt" 
                                    onchange="updateFileName(this)">
                             <label for="studentFile" class="file-input-label">
                                 📁 Datei auswählen
@@ -1017,15 +1733,30 @@ $availableYears = [
                             </div>
                             
                             <div style="font-size: 0.8rem; text-align: center; opacity: 0.7;">
-                                Beispiel: <?php 
-                                // Zeige ersten Schüler als Beispiel (würde aus der Datenbank kommen)
-                                echo "Maja Agatic, Lillian Joelin Blasy, Alessia Calo..."; 
+                                <?php 
+                                // Schüler-Vorschau (maximal 3 Namen)
+                                $students = getClassStudentsSimple($class['id']);
+                                $studentNames = [];
+                                foreach (array_slice($students, 0, 3) as $student) {
+                                    $studentNames[] = $student['first_name'] . ' ' . $student['last_name'];
+                                }
+                                if (!empty($studentNames)) {
+                                    echo escape(implode(', ', $studentNames));
+                                    if (count($students) > 3) {
+                                        echo '...';
+                                    }
+                                } else {
+                                    echo 'Noch keine Schüler';
+                                }
                                 ?>
                             </div>
 
                             <div class="class-actions">
                                 <button class="btn btn-secondary btn-sm" onclick="editClass(<?php echo $class['id']; ?>)">
                                     ✏️ Bearbeiten
+                                </button>
+                                <button class="btn btn-secondary btn-sm" onclick="showStudents(<?php echo $class['id']; ?>)">
+                                    👥 Schüler
                                 </button>
                                 <button class="btn btn-danger btn-sm" onclick="deleteClass(<?php echo $class['id']; ?>)">
                                     🗑️ Löschen
@@ -1094,10 +1825,94 @@ $availableYears = [
         </div>
     </div>
 
+    <!-- Edit Class Modal -->
+    <div id="editClassModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title">✏️ Klasse bearbeiten</h3>
+                <button class="modal-close" onclick="closeModal('editClassModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="editClassForm" onsubmit="updateClass(event)">
+                    <input type="hidden" id="editClassId" name="class_id">
+                    
+                    <div class="form-group">
+                        <label for="editClassName">Klassenname</label>
+                        <input type="text" id="editClassName" name="class_name" required>
+                    </div>
+                    
+                    <?php if ($hasSchoolYearColumn): ?>
+                    <div class="form-group">
+                        <label for="editSchoolYear">Schuljahr</label>
+                        <select id="editSchoolYear" name="school_year">
+                            <option value="">Optional wählen...</option>
+                            <?php foreach ($availableYears as $year): ?>
+                                <option value="<?php echo $year; ?>"><?php echo $year; ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <?php endif; ?>
+                </form>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="closeModal('editClassModal')">Abbrechen</button>
+                <button class="btn btn-primary" onclick="document.getElementById('editClassForm').dispatchEvent(new Event('submit'))">
+                    💾 Speichern
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Students Modal -->
+    <div id="studentsModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title">👥 Schüler verwalten</h3>
+                <button class="modal-close" onclick="closeModal('studentsModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="add-student-form">
+                    <h4>➕ Einzelnen Schüler hinzufügen</h4>
+                    <form id="addStudentForm" onsubmit="addSingleStudent(event)">
+                        <input type="hidden" id="addStudentClassId" name="class_id">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="studentFirstName">Vorname</label>
+                                <input type="text" id="studentFirstName" name="first_name" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="studentLastName">Nachname</label>
+                                <input type="text" id="studentLastName" name="last_name" required>
+                            </div>
+                            <button type="submit" class="btn btn-primary btn-sm">➕ Hinzufügen</button>
+                        </div>
+                    </form>
+                </div>
+                
+                <div>
+                    <h4 style="color: #3b82f6; margin-bottom: 1rem;">📋 Schülerliste</h4>
+                    <div id="studentsList" class="student-list">
+                        <!-- Wird dynamisch gefüllt -->
+                    </div>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="closeModal('studentsModal')">Schließen</button>
+            </div>
+        </div>
+    </div>
+
     <script>
+        // Hilfsfunktion für HTML-Escaping
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
         function applyFilters() {
             const classFilter = document.querySelector('.filter-select').value;
-            const yearFilter = document.querySelectorAll('.filter-select')[1].value;
+            const yearFilter = document.querySelectorAll('.filter-select')[1]?.value || 'all';
             
             const url = new URL(window.location);
             url.searchParams.set('tab', 'klassen');
@@ -1113,13 +1928,61 @@ $availableYears = [
             formData.append('action', 'create_class');
             formData.append('csrf_token', '<?php echo $_SESSION['csrf_token']; ?>');
 
-            fetch('', {
+            fetch('dashboard.php', {
                 method: 'POST',
-                body: formData
+                body: formData,
+                credentials: 'same-origin'
             })
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
+                    location.reload();
+                } else {
+                    alert('Fehler: ' + data.message);
+                }
+            })
+            .catch(error => {
+                alert('Ein Fehler ist aufgetreten.');
+                console.error(error);
+            });
+        }
+
+        function editClass(classId) {
+            // Klassendaten aus der Karte extrahieren
+            const button = event.target;
+            const card = button.closest('.class-card');
+            const className = card.querySelector('.class-name').textContent.trim();
+            const classYearElement = card.querySelector('.class-year');
+            const classYear = classYearElement ? classYearElement.textContent.trim() : '';
+            
+            // Modal-Felder füllen
+            document.getElementById('editClassId').value = classId;
+            document.getElementById('editClassName').value = className;
+            
+            const schoolYearSelect = document.getElementById('editSchoolYear');
+            if (schoolYearSelect && classYear !== 'Klasse') {
+                schoolYearSelect.value = classYear;
+            }
+            
+            showModal('editClassModal');
+        }
+
+        function updateClass(event) {
+            event.preventDefault();
+            
+            const formData = new FormData(event.target);
+            formData.append('action', 'update_class');
+            formData.append('csrf_token', '<?php echo $_SESSION['csrf_token']; ?>');
+
+            fetch('dashboard.php', {
+                method: 'POST',
+                body: formData,
+                credentials: 'same-origin'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    closeModal('editClassModal');
                     location.reload();
                 } else {
                     alert('Fehler: ' + data.message);
@@ -1138,9 +2001,10 @@ $availableYears = [
                 formData.append('class_id', classId);
                 formData.append('csrf_token', '<?php echo $_SESSION['csrf_token']; ?>');
 
-                fetch('', {
+                fetch('dashboard.php', {
                     method: 'POST',
-                    body: formData
+                    body: formData,
+                    credentials: 'same-origin'
                 })
                 .then(response => response.json())
                 .then(data => {
@@ -1157,36 +2021,235 @@ $availableYears = [
             }
         }
 
-        function editClass(classId) {
-            // Placeholder für Klassen-Bearbeitung
-            alert('Klassen-Bearbeitung wird in einem separaten Dialog implementiert.');
+        function showStudents(classId) {
+            document.getElementById('addStudentClassId').value = classId;
+            
+            // Schülerliste laden
+            loadStudentsList(classId);
+            showModal('studentsModal');
+        }
+
+        function loadStudentsList(classId) {
+            const studentsList = document.getElementById('studentsList');
+            studentsList.innerHTML = '<div style="padding: 2rem; text-align: center; opacity: 0.7;">Lädt...</div>';
+            
+            // Direkte POST-Anfrage statt GET für bessere Kompatibilität
+            const formData = new FormData();
+            formData.append('action', 'get_students');
+            formData.append('class_id', classId);
+            formData.append('csrf_token', '<?php echo $_SESSION['csrf_token']; ?>');
+            
+            fetch('dashboard.php', {
+                method: 'POST',
+                body: formData,
+                credentials: 'same-origin'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    const students = data.data;
+                    
+                    if (students.length === 0) {
+                        studentsList.innerHTML = '<div style="padding: 2rem; text-align: center; opacity: 0.7;">Keine Schüler in dieser Klasse</div>';
+                        return;
+                    }
+                    
+                    studentsList.innerHTML = students.map(student => `
+                        <div class="student-item">
+                            <div class="student-name">
+                                <strong>${escapeHtml(student.first_name)} ${escapeHtml(student.last_name)}</strong>
+                            </div>
+                            <div class="student-actions">
+                                <button class="btn btn-danger btn-sm" onclick="deleteStudent(${student.id}, ${classId})" title="Schüler entfernen">
+                                    🗑️
+                                </button>
+                            </div>
+                        </div>
+                    `).join('');
+                } else {
+                    studentsList.innerHTML = '<div style="padding: 2rem; text-align: center; color: #ef4444;">Fehler beim Laden der Schüler</div>';
+                }
+            })
+            .catch(error => {
+                console.error('Error loading students:', error);
+                studentsList.innerHTML = '<div style="padding: 2rem; text-align: center; color: #ef4444;">Fehler beim Laden der Schüler</div>';
+            });
+        }
+
+        function addSingleStudent(event) {
+            event.preventDefault();
+            
+            const formData = new FormData(event.target);
+            formData.append('action', 'add_single_student');
+            formData.append('csrf_token', '<?php echo $_SESSION['csrf_token']; ?>');
+
+            fetch('dashboard.php', {
+                method: 'POST',
+                body: formData,
+                credentials: 'same-origin'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    // Form zurücksetzen
+                    document.getElementById('studentFirstName').value = '';
+                    document.getElementById('studentLastName').value = '';
+                    
+                    // Schülerliste neu laden
+                    const classId = document.getElementById('addStudentClassId').value;
+                    loadStudentsList(classId);
+                    
+                    // Kurze Erfolgsmeldung
+                    alert(data.message);
+                } else {
+                    alert('Fehler: ' + data.message);
+                }
+            })
+            .catch(error => {
+                alert('Ein Fehler ist aufgetreten.');
+                console.error(error);
+            });
+        }
+
+        function deleteStudent(studentId, classId) {
+            if (confirm('Schüler wirklich entfernen?')) {
+                const formData = new FormData();
+                formData.append('action', 'delete_student');
+                formData.append('student_id', studentId);
+                formData.append('csrf_token', '<?php echo $_SESSION['csrf_token']; ?>');
+
+                fetch('dashboard.php', {
+                    method: 'POST',
+                    body: formData,
+                    credentials: 'same-origin'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        loadStudentsList(classId);
+                    } else {
+                        alert('Fehler: ' + data.message);
+                    }
+                })
+                .catch(error => {
+                    alert('Ein Fehler ist aufgetreten.');
+                    console.error(error);
+                });
+            }
         }
 
         function uploadStudents(event) {
             event.preventDefault();
             
             const fileInput = document.getElementById('studentFile');
+            const classSelect = document.getElementById('uploadClass');
+            
             if (!fileInput.files[0]) {
                 alert('Bitte wählen Sie eine Datei aus.');
                 return;
             }
-
+            
+            if (!classSelect.value) {
+                alert('Bitte wählen Sie eine Klasse aus.');
+                return;
+            }
+            
+            // Kapazitätsprüfung
+            const selectedOption = classSelect.selectedOptions[0];
+            const currentCount = parseInt(selectedOption.dataset.current);
+            const maxCount = parseInt(selectedOption.dataset.max);
+            
             const formData = new FormData(event.target);
             formData.append('action', 'upload_students');
             formData.append('csrf_token', '<?php echo $_SESSION['csrf_token']; ?>');
 
-            // Hier würde der Upload implementiert werden
-            alert('Schüler-Upload wird implementiert.');
+            // Loading state
+            const submitButton = event.target.querySelector('button[type="submit"]');
+            const originalText = submitButton.textContent;
+            submitButton.textContent = '⏳ Uploading...';
+            submitButton.disabled = true;
+
+            fetch('dashboard.php', {
+                method: 'POST',
+                body: formData,
+                credentials: 'same-origin'
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.text();
+            })
+            .then(text => {
+                try {
+                    // Versuche JSON zu parsen
+                    const data = JSON.parse(text);
+                    if (data.success) {
+                        alert(data.message);
+                        // Kurze Verzögerung damit der Benutzer die Meldung sehen kann
+                        setTimeout(() => {
+                            location.reload();
+                        }, 500);
+                    } else {
+                        alert('Fehler: ' + data.message);
+                    }
+                } catch (e) {
+                    console.error('Parse error:', e);
+                    console.error('Response text:', text);
+                    alert('Server-Fehler: Die Antwort konnte nicht verarbeitet werden.');
+                }
+            })
+            .catch(error => {
+                console.error('Upload error:', error);
+                alert('Ein Fehler ist aufgetreten: ' + error.message);
+            })
+            .finally(() => {
+                submitButton.textContent = originalText;
+                submitButton.disabled = false;
+            });
         }
 
         function updateFileName(input) {
             const fileName = document.getElementById('fileName');
             if (input.files[0]) {
                 fileName.textContent = input.files[0].name;
+                
+                // Einfache Validierung der Dateigröße (max 5MB)
+                if (input.files[0].size > 5 * 1024 * 1024) {
+                    alert('Datei ist zu groß. Maximum: 5MB');
+                    input.value = '';
+                    fileName.textContent = 'Keine ausgewählt';
+                }
             } else {
                 fileName.textContent = 'Keine ausgewählt';
             }
         }
+
+        // Modal functions
+        function showModal(modalId) {
+            document.getElementById(modalId).classList.add('show');
+        }
+
+        function closeModal(modalId) {
+            document.getElementById(modalId).classList.remove('show');
+        }
+
+        // ESC key to close modals
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'Escape') {
+                const openModal = document.querySelector('.modal.show');
+                if (openModal) {
+                    openModal.classList.remove('show');
+                }
+            }
+        });
+
+        // Click outside to close modal
+        document.addEventListener('click', function(event) {
+            if (event.target.classList.contains('modal')) {
+                event.target.classList.remove('show');
+            }
+        });
     </script>
 </body>
 </html>
