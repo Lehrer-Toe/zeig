@@ -24,8 +24,15 @@ $stmt = $db->prepare("SELECT COUNT(*) as count FROM users WHERE school_id = ? AN
 $stmt->execute([$user['school_id']]);
 $teacherCount = $stmt->fetch()['count'];
 
-// Schüler-Statistiken
-$stmt = $db->prepare("SELECT COUNT(*) as count FROM students WHERE school_id = ? AND is_active = 1");
+// Schüler-Statistiken - nur aus aktiven Klassen
+$stmt = $db->prepare("
+    SELECT COUNT(*) as count 
+    FROM students s 
+    JOIN classes c ON s.class_id = c.id 
+    WHERE s.school_id = ? 
+    AND s.is_active = 1 
+    AND c.is_active = 1
+");
 $stmt->execute([$user['school_id']]);
 $studentCount = $stmt->fetch()['count'];
 
@@ -425,7 +432,7 @@ if ($school['license_until']) {
                     <span class="stat-title">Schüler</span>
                 </div>
                 <div class="stat-number"><?php echo $studentCount; ?></div>
-                <div class="stat-subtitle">in allen Klassen</div>
+                <div class="stat-subtitle">in aktiven Klassen</div>
             </div>
 
             <div class="stat-card">
