@@ -17,8 +17,8 @@ define('BASE_URL', rtrim($baseUrl, '/'));
 // Datenbank-Konfiguration
 define('DB_HOST', 'localhost');
 define('DB_NAME', 'd043fe53');  // Korrigierter Datenbankname
-define('DB_USER', 'root');
-define('DB_PASS', '');
+define('DB_USER', 'd043fe53');
+define('DB_PASS', '@Madita2011');
 define('DB_CHARSET', 'utf8mb4');  // Hinzugefügte Charset-Definition
 
 // Session und Security Konfiguration
