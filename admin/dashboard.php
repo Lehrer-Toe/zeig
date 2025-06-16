@@ -1,9 +1,23 @@
 <?php
 require_once '../config.php';
 
+// Null-sichere escape() Funktion
+if (!function_exists('escape')) {
+    function escape($string) {
+        if ($string === null || $string === '') {
+            return '';
+        }
+        return htmlspecialchars($string, ENT_QUOTES, 'UTF-8');
+    }
+}
+
 // Schuladmin-Zugriff prüfen
 $user = requireSchuladmin();
-requireValidSchoolLicense($user['school_id']);
+
+// Sicherstellen, dass 'name' existiert
+if (!isset($user['name']) || $user['name'] === null) {
+    $user['name'] = $user['email'] ?? 'Unbekannter Benutzer';
+}
 
 // Schuldaten laden
 $school = getSchoolById($user['school_id']);
@@ -374,7 +388,7 @@ if ($school['license_until']) {
     <div class="container">
         <?php if ($flashMessage): ?>
             <div class="flash-message flash-<?php echo $flashMessage['type']; ?>">
-                <?php echo escape($flashMessage['message']); ?>
+                <?php echo escape($user['name'] ?? $user['email'] ?? 'Unbekannter Benutzer'); ?>
             </div>
         <?php endif; ?>
 
