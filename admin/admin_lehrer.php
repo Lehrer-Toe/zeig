@@ -1170,28 +1170,6 @@ if (!$hasGroupsColumn) {
         </div>
         <?php endif; ?>
 
-        <!-- Aktionen und Ansichtsumschaltung -->
-        <div class="controls">
-            <div class="actions-header">
-                <form method="POST" action="" style="display: inline;">
-                    <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
-                    <input type="hidden" name="action" value="generate_passwords">
-                    <button type="submit" class="btn btn-warning" onclick="return confirm('Möchten Sie wirklich für alle Lehrer neue Zufallspasswörter generieren?')">
-                        🎲 Zufallspasswörter für alle
-                    </button>
-                </form>
-            </div>
-            
-            <div class="view-toggle">
-                <a href="?view=cards" class="view-btn <?php echo $viewMode === 'cards' ? 'active' : ''; ?>">
-                    🔲 Kacheln
-                </a>
-                <a href="?view=list" class="view-btn <?php echo $viewMode === 'list' ? 'active' : ''; ?>">
-                    📋 Liste
-                </a>
-            </div>
-        </div>
-
         <!-- CSV-Upload Sektion -->
         <div class="upload-section">
             <div class="upload-header">
@@ -1261,6 +1239,32 @@ if (!$hasGroupsColumn) {
                 
                 <button type="submit" class="btn btn-success">✅ Erstellen</button>
             </form>
+        </div>
+
+        <!-- Aktionen und Ansichtsumschaltung - NACH dem "Neuen Lehrer anlegen" Formular -->
+        <div class="controls">
+            <div class="actions-header">
+                <form method="POST" action="" style="display: inline;">
+                    <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
+                    <input type="hidden" name="action" value="generate_passwords">
+                    <button type="submit" class="btn btn-warning" onclick="return confirm('Möchten Sie wirklich für alle Lehrer neue Zufallspasswörter generieren?')">
+                        🎲 Zufallspasswörter für alle
+                    </button>
+                </form>
+                
+                <div class="view-toggle">
+                    <a href="?view=cards" class="view-btn <?php echo $viewMode === 'cards' ? 'active' : ''; ?>">
+                        🔲 Kacheln
+                    </a>
+                    <a href="?view=list" class="view-btn <?php echo $viewMode === 'list' ? 'active' : ''; ?>">
+                        📋 Liste
+                    </a>
+                </div>
+                
+                <button type="button" class="btn btn-success" onclick="printTeacherList()">
+                    🖨️ Liste ausdrucken
+                </button>
+            </div>
         </div>
 
         <!-- Lehrerliste -->
