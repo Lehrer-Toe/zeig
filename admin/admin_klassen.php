@@ -896,8 +896,8 @@ case 'get_students':
                 </ul>
                 <p style="margin-top: 0.5rem;"><strong>Beispiele:</strong></p>
                 <ul>
-                    <li>Vorname Nachname: "Max Mustermann"</li>
-                    <li>Nachname, Vorname: "Mustermann, Max"</li>
+                    <li>Vorname, Nachname: "Max Mustermann"</li>
+                    <li>Nachname, Vorname: "Mustermann Max"</li>
                 </ul>
             </div>
 
@@ -1104,39 +1104,42 @@ case 'get_students':
         </div>
     </div>
 
-    <!-- Modal: Schüler bearbeiten -->
-    <div id="editStudentModal" class="modal">
-        <div class="modal-content" style="max-width: 500px;">
-            <div class="modal-header">
-                <h3 class="modal-title">Schüler bearbeiten</h3>
-                <span class="close" onclick="closeModal('editStudentModal')">&times;</span>
-            </div>
-            <form method="POST" action="">
-                <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
-                <input type="hidden" name="action" value="update_student">
-                <input type="hidden" id="edit_student_id" name="student_id" value="">
-                
-                <div class="form-group">
-                    <label for="edit_first_name">Vorname *</label>
-                    <input type="text" id="edit_first_name" name="edit_first_name" required>
-                </div>
-                
-                <div class="form-group">
-                    <label for="edit_last_name">Nachname *</label>
-                    <input type="text" id="edit_last_name" name="edit_last_name" required>
-                </div>
-                
-                <div class="form-actions">
-                    <button type="button" onclick="closeModal('editStudentModal')" class="btn btn-secondary">
-                        Abbrechen
-                    </button>
-                    <button type="submit" class="btn btn-success">
-                        Speichern
-                    </button>
-                </div>
-            </form>
+<!-- Modal: Schüler bearbeiten -->
+<div id="editStudentModal" class="modal">
+    <div class="modal-content" style="max-width: 500px;">
+        <div class="modal-header">
+            <h3 class="modal-title">Schüler bearbeiten</h3>
+            <span class="close" onclick="closeModal('editStudentModal')">&times;</span>
         </div>
+        <form id="editStudentForm" onsubmit="saveStudent(event)">
+            <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
+            <input type="hidden" name="action" value="update_student">
+            <input type="hidden" id="edit_student_id" name="student_id" value="">
+            <input type="hidden" id="current_class_id" value="">
+            
+            <div class="form-group">
+                <label for="edit_first_name">Vorname *</label>
+                <input type="text" id="edit_first_name" name="edit_first_name" required>
+            </div>
+            
+            <div class="form-group">
+                <label for="edit_last_name">Nachname *</label>
+                <input type="text" id="edit_last_name" name="edit_last_name" required>
+            </div>
+            
+            <div class="form-actions">
+                <button type="button" onclick="closeModal('editStudentModal')" class="btn btn-secondary">
+                    Abbrechen
+                </button>
+                <button type="submit" class="btn btn-success">
+                    Speichern
+                </button>
+            </div>
+        </form>
     </div>
+</div>
+
+
 
     <script>
         function updateFileName(input) {
@@ -1259,6 +1262,50 @@ function loadStudentsList(classId) {
             document.getElementById('edit_last_name').value = lastName;
             document.getElementById('editStudentModal').style.display = 'block';
         }
+
+
+function editStudent(studentId, firstName, lastName) {
+    document.getElementById('edit_student_id').value = studentId;
+    document.getElementById('edit_first_name').value = firstName;
+    document.getElementById('edit_last_name').value = lastName;
+    // Aktuelle Klassen-ID speichern
+    document.getElementById('current_class_id').value = document.getElementById('edit_class_id').value;
+    document.getElementById('editStudentModal').style.display = 'block';
+}
+
+function saveStudent(event) {
+    event.preventDefault();
+    
+    const formData = new FormData(document.getElementById('editStudentForm'));
+    
+    fetch('', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.text())
+    .then(html => {
+        // Prüfen ob erfolgreich (suche nach Erfolgs-Nachricht im HTML)
+        if (html.includes('erfolgreich aktualisiert')) {
+            // Modal schließen
+            closeModal('editStudentModal');
+            
+            // Schülerliste neu laden
+            const classId = document.getElementById('current_class_id').value;
+            if (classId) {
+                loadStudentsList(classId);
+            }
+            
+            // Erfolgsmeldung anzeigen (optional)
+            alert('Schüler erfolgreich aktualisiert');
+        } else {
+            alert('Fehler beim Speichern');
+        }
+    })
+    .catch(error => {
+        alert('Ein Fehler ist aufgetreten: ' + error.message);
+        console.error(error);
+    });
+}
 
         function closeModal(modalId) {
             document.getElementById(modalId).style.display = 'none';
