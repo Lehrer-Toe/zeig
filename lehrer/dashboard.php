@@ -263,10 +263,12 @@ if (!$teacher) {
     <div class="main-content">
         <div class="nav-tabs">
             <a href="?page=news" class="nav-tab <?= $page === 'news' ? 'active' : '' ?>">📰 News</a>
-            <a href="?page=klassen" class="nav-tab <?= $page === 'klassen' ? 'active' : '' ?>">👥 Meine Klassen</a>
-            <a href="?page=bewertungen" class="nav-tab <?= $page === 'bewertungen' ? 'active' : '' ?>">⭐ Bewertungen</a>
-            <a href="?page=gruppen" class="nav-tab <?= $page === 'gruppen' ? 'active' : '' ?>">👥 Gruppen</a>
-            <a href="?page=berichte" class="nav-tab <?= $page === 'berichte' ? 'active' : '' ?>">📊 Berichte</a>
+            <a href="?page=themen" class="nav-tab <?= $page === 'themen' ? 'active' : '' ?>">📚 Themen</a>
+            <a href="?page=gruppen" class="nav-tab <?= $page === 'gruppen' ? 'active' : '' ?>">👥 Gruppen verwalten</a>
+            <a href="?page=bewerten" class="nav-tab <?= $page === 'bewerten' ? 'active' : '' ?>">⭐ Schüler bewerten</a>
+            <a href="?page=vorlagen" class="nav-tab <?= $page === 'vorlagen' ? 'active' : '' ?>">📋 Bewertungsvorlagen</a>
+            <a href="?page=uebersicht" class="nav-tab <?= $page === 'uebersicht' ? 'active' : '' ?>">📊 Übersicht</a>
+            <a href="?page=einstellungen" class="nav-tab <?= $page === 'einstellungen' ? 'active' : '' ?>">⚙️ Einstellungen</a>
         </div>
 
         <div class="tab-content">
@@ -275,80 +277,187 @@ if (!$teacher) {
                 case 'news':
                     echo '<div class="welcome-message">';
                     echo '<h2>Willkommen, ' . htmlspecialchars($teacher['name']) . '!</h2>';
-                    echo '<p>Hier finden Sie aktuelle Informationen und können auf alle wichtigen Funktionen zugreifen.</p>';
+                    echo '<p>Hier finden Sie aktuelle Informationen und Neuigkeiten rund um das Bewertungssystem.</p>';
                     echo '</div>';
                     
-                    echo '<div class="stats-grid">';
-                    echo '<div class="stat-card"><div class="stat-number">0</div><div class="stat-label">Aktive Klassen</div></div>';
-                    echo '<div class="stat-card"><div class="stat-number">0</div><div class="stat-label">Schüler gesamt</div></div>';
-                    echo '<div class="stat-card"><div class="stat-number">0</div><div class="stat-label">Bewertungen diese Woche</div></div>';
-                    echo '<div class="stat-card"><div class="stat-number">0</div><div class="stat-label">Aktive Gruppen</div></div>';
+                    echo '<div style="background: #3d3d3d; padding: 30px; border-radius: 12px;">';
+                    echo '<h3 style="margin-bottom: 20px; color: #5b67ca;">📰 Aktuelle News</h3>';
+                    echo '<div style="border-left: 4px solid #5b67ca; padding-left: 20px; margin-bottom: 20px;">';
+                    echo '<h4 style="color: #e0e0e0; margin-bottom: 8px;">System erfolgreich eingerichtet</h4>';
+                    echo '<p style="color: #b0b0b0; margin-bottom: 5px;">Das Bewertungssystem wurde erfolgreich für Ihre Schule konfiguriert.</p>';
+                    echo '<small style="color: #888;">Heute</small>';
                     echo '</div>';
-                    
-                    echo '<div class="quick-actions">';
-                    echo '<a href="?page=klassen" class="action-card">';
-                    echo '<span class="action-icon">👥</span>';
-                    echo '<div class="action-title">Klassen verwalten</div>';
-                    echo '<div class="action-description">Übersicht über Ihre Klassen und Schüler</div>';
-                    echo '</a>';
-                    
-                    echo '<a href="?page=bewertungen" class="action-card">';
-                    echo '<span class="action-icon">⭐</span>';
-                    echo '<div class="action-title">Bewertungen erfassen</div>';
-                    echo '<div class="action-description">Schülerstärken bewerten und dokumentieren</div>';
-                    echo '</a>';
-                    
-                    echo '<a href="?page=gruppen" class="action-card">';
-                    echo '<span class="action-icon">👥</span>';
-                    echo '<div class="action-title">Gruppen erstellen</div>';
-                    echo '<div class="action-description">Arbeitsgruppen für Projekte zusammenstellen</div>';
-                    echo '</a>';
-                    
-                    echo '<a href="?page=berichte" class="action-card">';
-                    echo '<span class="action-icon">📊</span>';
-                    echo '<div class="action-title">Berichte generieren</div>';
-                    echo '<div class="action-description">Auswertungen und Übersichten erstellen</div>';
-                    echo '</a>';
+                    echo '<div style="border-left: 4px solid #27ae60; padding-left: 20px;">';
+                    echo '<h4 style="color: #e0e0e0; margin-bottom: 8px;">Erste Schritte</h4>';
+                    echo '<p style="color: #b0b0b0; margin-bottom: 5px;">Beginnen Sie mit der Erstellung von Themen und Bewertungsvorlagen.</p>';
+                    echo '<small style="color: #888;">Heute</small>';
+                    echo '</div>';
                     echo '</div>';
                     break;
                     
-                case 'klassen':
-                    echo '<h2>Meine Klassen</h2>';
-                    echo '<p>Hier werden Ihre zugewiesenen Klassen angezeigt.</p>';
-                    echo '<div style="background: #3d3d3d; padding: 40px; text-align: center; border-radius: 12px; margin-top: 20px;">';
-                    echo '<span style="font-size: 48px;">👥</span>';
-                    echo '<h3 style="margin: 20px 0;">Noch keine Klassen zugewiesen</h3>';
-                    echo '<p style="color: #b0b0b0;">Wenden Sie sich an Ihren Schuladministrator, um Klassen zugewiesen zu bekommen.</p>';
-                    echo '</div>';
-                    break;
+                case 'themen':
+                    echo '<h2>📚 Themen verwalten</h2>';
+                    echo '<p style="margin-bottom: 30px; color: #b0b0b0;">Hier können Sie Unterrichtsthemen erstellen und verwalten, die später für Bewertungen verwendet werden.</p>';
                     
-                case 'bewertungen':
-                    echo '<h2>Bewertungen</h2>';
-                    echo '<p>Erfassen und verwalten Sie Schülerbewertungen.</p>';
-                    echo '<div style="background: #3d3d3d; padding: 40px; text-align: center; border-radius: 12px; margin-top: 20px;">';
-                    echo '<span style="font-size: 48px;">⭐</span>';
-                    echo '<h3 style="margin: 20px 0;">Bewertungsmodul</h3>';
-                    echo '<p style="color: #b0b0b0;">Dieses Modul wird nach der Klassenzuweisung verfügbar.</p>';
+                    echo '<div style="background: #3d3d3d; padding: 30px; border-radius: 12px; margin-bottom: 20px;">';
+                    echo '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">';
+                    echo '<h3 style="color: #5b67ca;">Meine Themen</h3>';
+                    echo '<button style="background: #5b67ca; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer;">+ Neues Thema</button>';
+                    echo '</div>';
+                    echo '<div style="text-align: center; padding: 40px; color: #888;">';
+                    echo '<span style="font-size: 48px;">📚</span>';
+                    echo '<h3 style="margin: 20px 0;">Noch keine Themen vorhanden</h3>';
+                    echo '<p>Erstellen Sie Ihr erstes Unterrichtsthema, um mit der Bewertung zu beginnen.</p>';
+                    echo '</div>';
                     echo '</div>';
                     break;
                     
                 case 'gruppen':
-                    echo '<h2>Gruppen</h2>';
-                    echo '<p>Erstellen und verwalten Sie Arbeitsgruppen.</p>';
-                    echo '<div style="background: #3d3d3d; padding: 40px; text-align: center; border-radius: 12px; margin-top: 20px;">';
+                    echo '<h2>👥 Gruppen verwalten</h2>';
+                    echo '<p style="margin-bottom: 30px; color: #b0b0b0;">Erstellen und verwalten Sie Arbeitsgruppen für Ihre Klassen.</p>';
+                    
+                    echo '<div style="background: #3d3d3d; padding: 30px; border-radius: 12px; margin-bottom: 20px;">';
+                    echo '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">';
+                    echo '<h3 style="color: #5b67ca;">Aktive Gruppen</h3>';
+                    echo '<button style="background: #5b67ca; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer;">+ Neue Gruppe</button>';
+                    echo '</div>';
+                    echo '<div style="text-align: center; padding: 40px; color: #888;">';
                     echo '<span style="font-size: 48px;">👥</span>';
-                    echo '<h3 style="margin: 20px 0;">Gruppenmodul</h3>';
-                    echo '<p style="color: #b0b0b0;">Erstellen Sie Arbeitsgruppen basierend auf Schülerstärken.</p>';
+                    echo '<h3 style="margin: 20px 0;">Noch keine Gruppen erstellt</h3>';
+                    echo '<p>Erstellen Sie Arbeitsgruppen basierend auf Schülerstärken und Themen.</p>';
+                    echo '</div>';
                     echo '</div>';
                     break;
                     
-                case 'berichte':
-                    echo '<h2>Berichte</h2>';
-                    echo '<p>Generieren Sie Auswertungen und Übersichten.</p>';
-                    echo '<div style="background: #3d3d3d; padding: 40px; text-align: center; border-radius: 12px; margin-top: 20px;">';
+                case 'bewerten':
+                    echo '<h2>⭐ Schüler bewerten</h2>';
+                    echo '<p style="margin-bottom: 30px; color: #b0b0b0;">Bewerten Sie Ihre Schüler anhand der definierten Kriterien und Themen.</p>';
+                    
+                    echo '<div style="background: #3d3d3d; padding: 30px; border-radius: 12px; margin-bottom: 20px;">';
+                    echo '<h3 style="color: #5b67ca; margin-bottom: 20px;">Bewertung durchführen</h3>';
+                    echo '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 30px;">';
+                    echo '<div>';
+                    echo '<label style="display: block; margin-bottom: 8px; color: #e0e0e0;">Klasse auswählen</label>';
+                    echo '<select style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #555; background: #2d2d2d; color: #e0e0e0;">';
+                    echo '<option>Bitte Klasse auswählen...</option>';
+                    echo '</select>';
+                    echo '</div>';
+                    echo '<div>';
+                    echo '<label style="display: block; margin-bottom: 8px; color: #e0e0e0;">Thema auswählen</label>';
+                    echo '<select style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #555; background: #2d2d2d; color: #e0e0e0;">';
+                    echo '<option>Bitte Thema auswählen...</option>';
+                    echo '</select>';
+                    echo '</div>';
+                    echo '</div>';
+                    echo '<div style="text-align: center; padding: 40px; color: #888;">';
+                    echo '<span style="font-size: 48px;">⭐</span>';
+                    echo '<h3 style="margin: 20px 0;">Bewertung starten</h3>';
+                    echo '<p>Wählen Sie eine Klasse und ein Thema aus, um mit der Bewertung zu beginnen.</p>';
+                    echo '</div>';
+                    echo '</div>';
+                    break;
+                    
+                case 'vorlagen':
+                    echo '<h2>📋 Bewertungsvorlagen</h2>';
+                    echo '<p style="margin-bottom: 30px; color: #b0b0b0;">Erstellen und verwalten Sie Bewertungsvorlagen mit verschiedenen Kriterien.</p>';
+                    
+                    echo '<div style="background: #3d3d3d; padding: 30px; border-radius: 12px; margin-bottom: 20px;">';
+                    echo '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">';
+                    echo '<h3 style="color: #5b67ca;">Meine Vorlagen</h3>';
+                    echo '<button style="background: #5b67ca; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer;">+ Neue Vorlage</button>';
+                    echo '</div>';
+                    echo '<div style="text-align: center; padding: 40px; color: #888;">';
+                    echo '<span style="font-size: 48px;">📋</span>';
+                    echo '<h3 style="margin: 20px 0;">Noch keine Vorlagen vorhanden</h3>';
+                    echo '<p>Erstellen Sie Bewertungsvorlagen mit verschiedenen Kriterien und Gewichtungen.</p>';
+                    echo '</div>';
+                    echo '</div>';
+                    break;
+                    
+                case 'uebersicht':
+                    echo '<h2>📊 Übersicht</h2>';
+                    echo '<p style="margin-bottom: 30px; color: #b0b0b0;">Verschaffen Sie sich einen Überblick über alle Bewertungen und Auswertungen.</p>';
+                    
+                    echo '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin-bottom: 30px;">';
+                    echo '<div style="background: #3d3d3d; padding: 20px; border-radius: 12px; text-align: center;">';
+                    echo '<div style="font-size: 32px; font-weight: bold; color: #5b67ca; margin-bottom: 8px;">0</div>';
+                    echo '<div style="color: #b0b0b0; font-size: 14px;">Bewertungen gesamt</div>';
+                    echo '</div>';
+                    echo '<div style="background: #3d3d3d; padding: 20px; border-radius: 12px; text-align: center;">';
+                    echo '<div style="font-size: 32px; font-weight: bold; color: #27ae60; margin-bottom: 8px;">0</div>';
+                    echo '<div style="color: #b0b0b0; font-size: 14px;">Aktive Themen</div>';
+                    echo '</div>';
+                    echo '<div style="background: #3d3d3d; padding: 20px; border-radius: 12px; text-align: center;">';
+                    echo '<div style="font-size: 32px; font-weight: bold; color: #e67e22; margin-bottom: 8px;">0</div>';
+                    echo '<div style="color: #b0b0b0; font-size: 14px;">Gruppen erstellt</div>';
+                    echo '</div>';
+                    echo '<div style="background: #3d3d3d; padding: 20px; border-radius: 12px; text-align: center;">';
+                    echo '<div style="font-size: 32px; font-weight: bold; color: #8e44ad; margin-bottom: 8px;">0</div>';
+                    echo '<div style="color: #b0b0b0; font-size: 14px;">Schüler bewertet</div>';
+                    echo '</div>';
+                    echo '</div>';
+                    
+                    echo '<div style="background: #3d3d3d; padding: 30px; border-radius: 12px;">';
+                    echo '<h3 style="color: #5b67ca; margin-bottom: 20px;">Letzte Aktivitäten</h3>';
+                    echo '<div style="text-align: center; padding: 40px; color: #888;">';
                     echo '<span style="font-size: 48px;">📊</span>';
-                    echo '<h3 style="margin: 20px 0;">Berichtsmodul</h3>';
-                    echo '<p style="color: #b0b0b0;">Erstellen Sie detaillierte Berichte über Schülerleistungen.</p>';
+                    echo '<h3 style="margin: 20px 0;">Noch keine Aktivitäten</h3>';
+                    echo '<p>Hier werden Ihre letzten Bewertungen und Aktivitäten angezeigt.</p>';
+                    echo '</div>';
+                    echo '</div>';
+                    break;
+                    
+                case 'einstellungen':
+                    echo '<h2>⚙️ Einstellungen</h2>';
+                    echo '<p style="margin-bottom: 30px; color: #b0b0b0;">Verwalten Sie Ihre persönlichen Einstellungen und Präferenzen.</p>';
+                    
+                    echo '<div style="background: #3d3d3d; padding: 30px; border-radius: 12px; margin-bottom: 20px;">';
+                    echo '<h3 style="color: #5b67ca; margin-bottom: 20px;">Persönliche Daten</h3>';
+                    echo '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">';
+                    echo '<div>';
+                    echo '<label style="display: block; margin-bottom: 8px; color: #e0e0e0;">Name</label>';
+                    echo '<input type="text" value="' . htmlspecialchars($teacher['name']) . '" style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #555; background: #2d2d2d; color: #e0e0e0;" readonly>';
+                    echo '</div>';
+                    echo '<div>';
+                    echo '<label style="display: block; margin-bottom: 8px; color: #e0e0e0;">E-Mail</label>';
+                    echo '<input type="email" value="' . htmlspecialchars($teacher['email']) . '" style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #555; background: #2d2d2d; color: #e0e0e0;" readonly>';
+                    echo '</div>';
+                    echo '</div>';
+                    echo '</div>';
+                    
+                    echo '<div style="background: #3d3d3d; padding: 30px; border-radius: 12px; margin-bottom: 20px;">';
+                    echo '<h3 style="color: #5b67ca; margin-bottom: 20px;">Passwort ändern</h3>';
+                    echo '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px;">';
+                    echo '<div>';
+                    echo '<label style="display: block; margin-bottom: 8px; color: #e0e0e0;">Neues Passwort</label>';
+                    echo '<input type="password" style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #555; background: #2d2d2d; color: #e0e0e0;">';
+                    echo '</div>';
+                    echo '<div>';
+                    echo '<label style="display: block; margin-bottom: 8px; color: #e0e0e0;">Passwort bestätigen</label>';
+                    echo '<input type="password" style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #555; background: #2d2d2d; color: #e0e0e0;">';
+                    echo '</div>';
+                    echo '</div>';
+                    echo '<button style="background: #5b67ca; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer;">Passwort ändern</button>';
+                    echo '</div>';
+                    
+                    echo '<div style="background: #3d3d3d; padding: 30px; border-radius: 12px;">';
+                    echo '<h3 style="color: #5b67ca; margin-bottom: 20px;">Systemeinstellungen</h3>';
+                    echo '<div style="margin-bottom: 15px;">';
+                    echo '<label style="display: flex; align-items: center; color: #e0e0e0; cursor: pointer;">';
+                    echo '<input type="checkbox" style="margin-right: 10px;"> E-Mail-Benachrichtigungen aktivieren';
+                    echo '</label>';
+                    echo '</div>';
+                    echo '<div style="margin-bottom: 15px;">';
+                    echo '<label style="display: flex; align-items: center; color: #e0e0e0; cursor: pointer;">';
+                    echo '<input type="checkbox" checked style="margin-right: 10px;"> Automatische Speicherung';
+                    echo '</label>';
+                    echo '</div>';
+                    echo '<div style="margin-bottom: 20px;">';
+                    echo '<label style="display: flex; align-items: center; color: #e0e0e0; cursor: pointer;">';
+                    echo '<input type="checkbox" style="margin-right: 10px;"> Erweiterte Bewertungsoptionen anzeigen';
+                    echo '</label>';
+                    echo '</div>';
+                    echo '<button style="background: #27ae60; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer;">Einstellungen speichern</button>';
                     echo '</div>';
                     break;
                     
