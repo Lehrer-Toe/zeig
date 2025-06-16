@@ -1,18 +1,13 @@
 <?php
-session_start();
+require_once 'config.php';
 
-// Session-Daten löschen
-$_SESSION = array();
+// User ausloggen
+logoutUser();
 
-// Session-Cookie löschen
-if (isset($_COOKIE[session_name()])) {
-    setcookie(session_name(), '', time()-3600, '/');
-}
+// Weiterleitung zum Login mit Nachricht
+$_SESSION['flash_message'] = 'Sie wurden erfolgreich abgemeldet.';
+$_SESSION['flash_type'] = 'success';
 
-// Session beenden
-session_destroy();
-
-// Zur Login-Seite weiterleiten
 header('Location: index.php');
-exit();
+exit;
 ?>
