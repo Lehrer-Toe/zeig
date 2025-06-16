@@ -437,7 +437,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 // Ansichtsmodus (Liste oder Kacheln)
-$viewMode = $_GET['view'] ?? 'cards'; // 'cards' oder 'list'
+$viewMode = $_GET['view'] ?? 'list'; // 'list' oder 'cards' - Liste ist Standard
+
+// Bei Druckansicht immer Liste verwenden
+if (isset($_GET['print'])) {
+    $viewMode = 'list';
+}
 
 // Lehrer laden
 $selectFields = "id, name, email, first_login, created_at, password_set_by_admin, admin_password";
@@ -533,13 +538,13 @@ if (!$hasGroupsColumn) {
             line-height: 1.5;
         }
 
-        .controls {
+        .main-controls {
             display: flex;
-            justify-content: space-between;
             align-items: center;
+            gap: 2rem;
             margin-bottom: 2rem;
             flex-wrap: wrap;
-            gap: 1rem;
+            justify-content: flex-start;
         }
 
         .view-toggle {
@@ -909,6 +914,82 @@ if (!$hasGroupsColumn) {
             flex-wrap: wrap;
         }
 
+        .view-actions {
+            display: flex;
+            gap: 1rem;
+        }
+
+        /* Druckstile */
+        @media print {
+            body {
+                background: white !important;
+                color: black !important;
+            }
+            
+            .header, .upload-section, .main-controls, .actions-header, .view-actions, .view-toggle, .stats-grid, .teacher-actions, .table-actions, .modal {
+                display: none !important;
+            }
+            
+            .container {
+                max-width: none !important;
+                padding: 1rem !important;
+            }
+            
+            .page-title {
+                color: black !important;
+                text-align: center;
+                margin-bottom: 2rem;
+            }
+            
+            .teachers-table {
+                background: white !important;
+                border: 1px solid black !important;
+            }
+            
+            .teachers-table table {
+                width: 100% !important;
+            }
+            
+            .teachers-table th {
+                background: #f0f0f0 !important;
+                color: black !important;
+                border: 1px solid black !important;
+                padding: 1rem !important;
+            }
+            
+            .teachers-table td {
+                border: 1px solid black !important;
+                padding: 1.5rem !important;
+                color: black !important;
+            }
+            
+            .teachers-table tr {
+                page-break-inside: avoid;
+                background: white !important;
+            }
+            
+            .permission-badge {
+                background: #f0f0f0 !important;
+                color: black !important;
+                border: 1px solid black !important;
+            }
+            
+            .password-display {
+                background: #f0f0f0 !important;
+                color: black !important;
+                border: 1px solid black !important;
+            }
+            
+            /* Große Abstände zwischen Lehrern */
+            .teachers-table tbody tr {
+                border-bottom: 3px solid black !important;
+            }
+            
+            .teachers-table tbody tr:not(:last-child) td {
+                border-bottom: 3px solid black !important;
+            }
+        }
+
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -984,9 +1065,19 @@ if (!$hasGroupsColumn) {
                 padding: 1rem;
             }
             
-            .controls {
+            .main-controls {
                 flex-direction: column;
                 align-items: stretch;
+                gap: 1rem;
+            }
+            
+            .main-controls > * {
+                width: 100%;
+                justify-content: center;
+            }
+            
+            .view-toggle {
+                justify-content: center;
             }
             
             .teachers-grid {
@@ -1025,10 +1116,18 @@ if (!$hasGroupsColumn) {
 
     <div class="container">
         <div class="page-header">
-            <h1 class="page-title">Lehrer verwalten</h1>
+            <h1 class="page-title">
+                <?php if (isset($_GET['print'])): ?>
+                    Lehrerliste - <?php echo htmlspecialchars($school['name']); ?>
+                <?php else: ?>
+                    Lehrer verwalten
+                <?php endif; ?>
+            </h1>
+            <?php if (!isset($_GET['print'])): ?>
             <p class="page-subtitle">
                 Verwalten Sie die Lehrerkonten für <?php echo htmlspecialchars($school['name']); ?>.
             </p>
+            <?php endif; ?>
         </div>
 
         <!-- Erfolgs- und Fehlermeldungen -->
@@ -1052,6 +1151,7 @@ if (!$hasGroupsColumn) {
         <?php endif; ?>
 
         <!-- Statistiken -->
+        <?php if (!isset($_GET['print'])): ?>
         <div class="stats-grid">
             <div class="stat-card">
                 <h3><?php echo count($teachers); ?></h3>
@@ -1068,6 +1168,7 @@ if (!$hasGroupsColumn) {
                 <p>Erste Anmeldung ausstehend</p>
             </div>
         </div>
+        <?php endif; ?>
 
         <!-- Aktionen und Ansichtsumschaltung -->
         <div class="controls">
@@ -1370,6 +1471,47 @@ if (!$hasGroupsColumn) {
     </div>
 
     <script>
+        // Scroll-Position speichern und wiederherstellen
+        function saveScrollPosition() {
+            sessionStorage.setItem('teacherScrollPosition', window.scrollY);
+        }
+        
+        function restoreScrollPosition() {
+            const scrollPos = sessionStorage.getItem('teacherScrollPosition');
+            if (scrollPos) {
+                window.scrollTo(0, parseInt(scrollPos));
+                sessionStorage.removeItem('teacherScrollPosition');
+            }
+        }
+        
+        // Bei Seitenload Scroll-Position wiederherstellen
+        window.addEventListener('load', function() {
+            restoreScrollPosition();
+        });
+        
+        // Alle Formulare mit Scroll-Position speichern ausstatten
+        document.addEventListener('DOMContentLoaded', function() {
+            // Alle Formulare finden und Event-Listener hinzufügen
+            const forms = document.querySelectorAll('form');
+            forms.forEach(function(form) {
+                // Nur bei POST-Formularen (nicht bei Modals oder GET-Requests)
+                if (form.method.toLowerCase() === 'post') {
+                    form.addEventListener('submit', function(e) {
+                        // Scroll-Position speichern bevor das Formular abgesendet wird
+                        saveScrollPosition();
+                    });
+                }
+            });
+            
+            // Modal-Formular separat behandeln
+            const editForm = document.getElementById('editForm');
+            if (editForm) {
+                editForm.addEventListener('submit', function(e) {
+                    saveScrollPosition();
+                });
+            }
+        });
+        
         function openEditModal(id, name, email) {
             document.getElementById('editTeacherId').value = id;
             document.getElementById('editTeacherName').value = name;
@@ -1380,6 +1522,35 @@ if (!$hasGroupsColumn) {
         function closeEditModal() {
             document.getElementById('editModal').classList.remove('show');
         }
+        
+        function printTeacherList() {
+            // Zur Listenansicht wechseln falls in Kacheln
+            const currentView = '<?php echo $viewMode; ?>';
+            if (currentView === 'cards') {
+                // Zur Liste umleiten und dann drucken
+                const url = new URL(window.location);
+                url.searchParams.set('view', 'list');
+                url.searchParams.set('print', '1');
+                window.location.href = url.toString();
+                return;
+            }
+            
+            // Drucken ausführen
+            window.print();
+        }
+        
+        // Auto-print wenn print Parameter gesetzt ist
+        <?php if (isset($_GET['print'])): ?>
+        window.addEventListener('load', function() {
+            setTimeout(function() {
+                window.print();
+                // Print parameter nach dem Drucken entfernen
+                const url = new URL(window.location);
+                url.searchParams.delete('print');
+                window.history.replaceState({}, '', url);
+            }, 500);
+        });
+        <?php endif; ?>
         
         // Modal außerhalb schließen
         document.getElementById('editModal').addEventListener('click', function(e) {
