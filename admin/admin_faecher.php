@@ -1,7 +1,6 @@
 <?php
 require_once '../config.php';
 
-
 // Überprüfen, ob der Benutzer angemeldet ist und ein Admin ist
 if (!isset($_SESSION['user_id']) || ($_SESSION['user_type'] !== 'schuladmin' && $_SESSION['user_type'] !== 'superadmin')) {
     header('Location: ../index.php');
@@ -11,6 +10,9 @@ if (!isset($_SESSION['user_id']) || ($_SESSION['user_type'] !== 'schuladmin' && 
 $user_id = $_SESSION['user_id'];
 $user_type = $_SESSION['user_type'];
 $school_id = $_SESSION['school_id'] ?? null;
+
+// PDO-Verbindung holen
+$db = getDB();
 
 // Funktion zum Generieren einer zufälligen Farbe
 function generateRandomColor() {
@@ -34,23 +36,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 }
                 
                 // Prüfen, ob das Kürzel bereits existiert
-                $check_sql = "SELECT id FROM subjects WHERE school_id = ? AND short_name = ?";
-                $check_stmt = $conn->prepare($check_sql);
-                $check_stmt->bind_param("is", $school_id, $short_name);
-                $check_stmt->execute();
-                if ($check_stmt->get_result()->num_rows > 0) {
+                $check_stmt = $db->prepare("SELECT id FROM subjects WHERE school_id = ? AND short_name = ?");
+                $check_stmt->execute([$school_id, $short_name]);
+                if ($check_stmt->fetch()) {
                     throw new Exception('Ein Fach mit diesem Kürzel existiert bereits.');
                 }
                 
-                $sql = "INSERT INTO subjects (school_id, short_name, full_name, color) VALUES (?, ?, ?, ?)";
-                $stmt = $conn->prepare($sql);
-                $stmt->bind_param("isss", $school_id, $short_name, $full_name, $color);
+                $stmt = $db->prepare("INSERT INTO subjects (school_id, short_name, full_name, color) VALUES (?, ?, ?, ?)");
                 
-                if ($stmt->execute()) {
+                if ($stmt->execute([$school_id, $short_name, $full_name, $color])) {
                     $response['success'] = true;
                     $response['message'] = 'Fach erfolgreich hinzugefügt.';
                     $response['subject'] = [
-                        'id' => $conn->insert_id,
+                        'id' => $db->lastInsertId(),
                         'short_name' => $short_name,
                         'full_name' => $full_name,
                         'color' => $color
@@ -68,11 +66,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     throw new Exception('Bitte geben Sie einen Fachnamen ein.');
                 }
                 
-                $sql = "UPDATE subjects SET full_name = ? WHERE id = ? AND school_id = ?";
-                $stmt = $conn->prepare($sql);
-                $stmt->bind_param("sii", $full_name, $id, $school_id);
+                $stmt = $db->prepare("UPDATE subjects SET full_name = ? WHERE id = ? AND school_id = ?");
                 
-                if ($stmt->execute()) {
+                if ($stmt->execute([$full_name, $id, $school_id])) {
                     $response['success'] = true;
                     $response['message'] = 'Fach erfolgreich aktualisiert.';
                 } else {
@@ -84,21 +80,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $id = intval($_POST['id'] ?? 0);
                 
                 // Prüfen, ob das Fach in Gruppen verwendet wird
-                $check_sql = "SELECT COUNT(*) as count FROM group_subjects WHERE subject_id = ?";
-                $check_stmt = $conn->prepare($check_sql);
-                $check_stmt->bind_param("i", $id);
-                $check_stmt->execute();
-                $result = $check_stmt->get_result()->fetch_assoc();
+                $check_stmt = $db->prepare("SELECT COUNT(*) as count FROM group_subjects WHERE subject_id = ?");
+                $check_stmt->execute([$id]);
+                $result = $check_stmt->fetch();
                 
                 if ($result['count'] > 0) {
                     throw new Exception('Dieses Fach wird noch in Gruppen verwendet und kann nicht gelöscht werden.');
                 }
                 
-                $sql = "DELETE FROM subjects WHERE id = ? AND school_id = ?";
-                $stmt = $conn->prepare($sql);
-                $stmt->bind_param("ii", $id, $school_id);
+                $stmt = $db->prepare("DELETE FROM subjects WHERE id = ? AND school_id = ?");
                 
-                if ($stmt->execute()) {
+                if ($stmt->execute([$id, $school_id])) {
                     $response['success'] = true;
                     $response['message'] = 'Fach erfolgreich gelöscht.';
                 } else {
@@ -114,11 +106,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     throw new Exception('Ungültiger Farbcode.');
                 }
                 
-                $sql = "UPDATE subjects SET color = ? WHERE id = ? AND school_id = ?";
-                $stmt = $conn->prepare($sql);
-                $stmt->bind_param("sii", $color, $id, $school_id);
+                $stmt = $db->prepare("UPDATE subjects SET color = ? WHERE id = ? AND school_id = ?");
                 
-                if ($stmt->execute()) {
+                if ($stmt->execute([$color, $id, $school_id])) {
                     $response['success'] = true;
                     $response['message'] = 'Farbe erfolgreich aktualisiert.';
                 } else {
@@ -138,18 +128,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 $subjects = [];
 try {
     // Prüfen, ob die Tabelle existiert
-    $check_table = "SHOW TABLES LIKE 'subjects'";
-    $table_result = $conn->query($check_table);
+    $check_table = $db->query("SHOW TABLES LIKE 'subjects'");
     
-    if ($table_result->num_rows == 0) {
+    if ($check_table->rowCount() == 0) {
         // Tabelle existiert nicht - Hinweis anzeigen
         $show_migration_notice = true;
     } else {
-        $sql = "SELECT * FROM subjects WHERE school_id = ? ORDER BY short_name";
-        $stmt = $conn->prepare($sql);
-        $stmt->bind_param("i", $school_id);
-        $stmt->execute();
-        $subjects = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+        $stmt = $db->prepare("SELECT * FROM subjects WHERE school_id = ? ORDER BY short_name");
+        $stmt->execute([$school_id]);
+        $subjects = $stmt->fetchAll();
     }
 } catch (Exception $e) {
     $show_migration_notice = true;
@@ -270,13 +257,6 @@ try {
             cursor: pointer;
             background: none;
             padding: 2px;
-        }
-        
-        .color-preview {
-            width: 40px;
-            height: 30px;
-            border-radius: 4px;
-            border: 1px solid rgba(255, 255, 255, 0.2);
         }
         
         .btn {
@@ -476,7 +456,6 @@ try {
                            class="color-picker" 
                            value="<?php echo htmlspecialchars($subject['color']); ?>"
                            onchange="updateSubjectColor(<?php echo $subject['id']; ?>, this.value)">
-                    <div class="color-preview" style="background-color: <?php echo htmlspecialchars($subject['color']); ?>"></div>
                 </div>
                 <button class="btn btn-danger" onclick="deleteSubject(<?php echo $subject['id']; ?>)">Löschen</button>
             </div>
@@ -533,11 +512,9 @@ try {
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    // Update color preview
+                    // Update color in subject code
                     const item = document.querySelector(`[data-id="${id}"]`);
-                    const preview = item.querySelector('.color-preview');
                     const code = item.querySelector('.subject-code');
-                    preview.style.backgroundColor = color;
                     code.style.color = color;
                 } else {
                     showAlert(data.message, 'danger');
@@ -611,7 +588,6 @@ try {
                                        class="color-picker" 
                                        value="${data.subject.color}"
                                        onchange="updateSubjectColor(${data.subject.id}, this.value)">
-                                <div class="color-preview" style="background-color: ${data.subject.color}"></div>
                             </div>
                             <button class="btn btn-danger" onclick="deleteSubject(${data.subject.id})">Löschen</button>
                         </div>
