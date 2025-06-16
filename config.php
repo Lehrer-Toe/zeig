@@ -5,12 +5,25 @@ session_start();
 define('APP_NAME', 'Zeig, was du kannst!');
 define('APP_VERSION', '1.0.0');
 
+// BASE_URL automatisch ermitteln
+$protocol = isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https://' : 'http://';
+$host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+$scriptDir = dirname($_SERVER['SCRIPT_NAME']);
+$baseUrl = $protocol . $host . $scriptDir;
+
+// Trailing slash entfernen falls vorhanden
+define('BASE_URL', rtrim($baseUrl, '/'));
+
 // Datenbank-Konfiguration
 define('DB_HOST', 'localhost');
 define('DB_NAME', 'd043fe53');  // Korrigierter Datenbankname
-define('DB_USER', 'd043fe53');
-define('DB_PASS', '@Madita2011');
+define('DB_USER', 'root');
+define('DB_PASS', '');
 define('DB_CHARSET', 'utf8mb4');  // Hinzugefügte Charset-Definition
+
+// Session und Security Konfiguration
+define('SESSION_LIFETIME', 3600 * 2); // 2 Stunden
+define('PASSWORD_MIN_LENGTH', 8);
 
 // PDO-Verbindung mit Error Handling
 try {
@@ -46,7 +59,7 @@ function getCurrentUser() {
     
     switch ($_SESSION['user_type']) {
         case 'superadmin':
-            $stmt = $pdo->prepare("SELECT id, email, 'superadmin' as user_type, NULL as school_id FROM superadmins WHERE id = ?");
+            $stmt = $pdo->prepare("SELECT id, email, 'superadmin' as user_type, NULL as school_id FROM users WHERE id = ? AND user_type = 'superadmin'");
             break;
         case 'schuladmin':  // Korrigierter user_type Name
             $stmt = $pdo->prepare("SELECT id, email, 'schuladmin' as user_type, school_id FROM users WHERE id = ? AND user_type = 'schuladmin'");
@@ -90,19 +103,19 @@ function authenticateUser($email, $password) {
     
     // Check Superadmin (falls superadmins Tabelle existiert)
     try {
-        $stmt = $pdo->prepare("SELECT id, email, password_hash as password FROM users WHERE email = ? AND user_type = 'superadmin' AND is_active = 1");
+        $stmt = $pdo->prepare("SELECT id, email, password_hash as password, name FROM users WHERE email = ? AND user_type = 'superadmin' AND is_active = 1");
         $stmt->execute([$email]);
         $user = $stmt->fetch();
         
         if ($user && password_verify($password, $user['password'])) {
-            return ['id' => $user['id'], 'email' => $user['email'], 'user_type' => 'superadmin', 'school_id' => null];
+            return ['id' => $user['id'], 'email' => $user['email'], 'user_type' => 'superadmin', 'school_id' => null, 'name' => $user['name']];
         }
     } catch (Exception $e) {
         error_log("Superadmin check failed: " . $e->getMessage());
     }
     
     // Check normale Users (schuladmin, lehrer)
-    $stmt = $pdo->prepare("SELECT id, email, password_hash, user_type, school_id FROM users WHERE email = ? AND is_active = 1");
+    $stmt = $pdo->prepare("SELECT id, email, password_hash, user_type, school_id, name FROM users WHERE email = ? AND is_active = 1");
     $stmt->execute([$email]);
     $user = $stmt->fetch();
     
@@ -111,7 +124,8 @@ function authenticateUser($email, $password) {
             'id' => $user['id'], 
             'email' => $user['email'], 
             'user_type' => $user['user_type'], 
-            'school_id' => $user['school_id']
+            'school_id' => $user['school_id'],
+            'name' => $user['name']
         ];
     }
     
@@ -119,16 +133,32 @@ function authenticateUser($email, $password) {
 }
 
 function loginUser($user) {
+    // Session regenerieren für Sicherheit
+    session_regenerate_id(true);
+    
     $_SESSION['user_id'] = $user['id'];
     $_SESSION['user_type'] = $user['user_type'];
-    $_SESSION['user_email'] = $user['email'];
+    $_SESSION['email'] = $user['email'];
+    $_SESSION['name'] = $user['name'];
     if (isset($user['school_id'])) {
         $_SESSION['school_id'] = $user['school_id'];
     }
+    $_SESSION['login_time'] = time();
 }
 
 function logoutUser() {
+    // Session-Variablen löschen
+    $_SESSION = array();
+    
+    // Session-Cookie löschen
+    if (isset($_COOKIE[session_name()])) {
+        setcookie(session_name(), '', time() - 3600, '/');
+    }
+    
+    // Session zerstören
     session_destroy();
+    
+    // Neue Session starten für Flash Messages
     session_start();
 }
 
@@ -205,6 +235,54 @@ function requireValidSchoolLicense($schoolId) {
         die('Schullizenz ist abgelaufen.');
     }
     return $school;
+}
+
+// CSRF Token Funktionen
+function validateCSRFToken($token) {
+    return isset($_SESSION['csrf_token']) && hash_equals($_SESSION['csrf_token'], $token);
+}
+
+function generateCSRFToken() {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+    return $_SESSION['csrf_token'];
+}
+
+// Flash Message Funktionen
+function getFlashMessage() {
+    if (isset($_SESSION['flash_message'])) {
+        $message = $_SESSION['flash_message'];
+        $type = $_SESSION['flash_type'] ?? 'info';
+        
+        unset($_SESSION['flash_message']);
+        unset($_SESSION['flash_type']);
+        
+        return ['message' => $message, 'type' => $type];
+    }
+    
+    return null;
+}
+
+function setFlashMessage($message, $type = 'info') {
+    $_SESSION['flash_message'] = $message;
+    $_SESSION['flash_type'] = $type;
+}
+
+// Klassen-Funktionen
+function canCreateClass($schoolId) {
+    $school = getSchoolById($schoolId);
+    if (!$school) return false;
+    
+    $db = getDB();
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM classes WHERE school_id = ? AND is_active = 1");
+    $stmt->execute([$schoolId]);
+    $currentCount = $stmt->fetch()['count'];
+    
+    return $currentCount < $school['max_classes'];
+}
+
+function checkSchoolLicense($schoolId) {
+    $school = getSchoolById($schoolId);
+    return $school && $school['is_active'] && $school['license_until'] >= date('Y-m-d');
 }
 
 // Fehlerbehandlung für Development
