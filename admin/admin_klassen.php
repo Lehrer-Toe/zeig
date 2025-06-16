@@ -11,6 +11,9 @@ if (!$school) {
     die('Schule nicht gefunden.');
 }
 
+// Flash-Message
+$flashMessage = getFlashMessage();
+
 $errors = [];
 $success = '';
 
@@ -51,90 +54,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 break;
                 
             case 'upload_students':
-                
-            case 'add_student':
-                // Schüler hinzufügen
-                $classId = (int)($_POST['class_id'] ?? 0);
-                $firstName = trim($_POST['first_name'] ?? '');
-                $lastName = trim($_POST['last_name'] ?? '');
-                $birthDate = formatDateForDB($_POST['birth_date'] ?? '');
-                
-                if (empty($firstName) || empty($lastName)) {
-                    $errors[] = 'Vor- und Nachname sind erforderlich.';
-                } elseif (!$classId) {
-                    $errors[] = 'Ungültige Klassen-ID.';
-                } else {
-                    // Prüfen ob Schülerlimit erreicht
-                    if (!canAddStudentToClass($classId)) {
-                        $errors[] = 'Maximale Schülerzahl für diese Klasse erreicht (' . $school['max_students_per_class'] . ').';
-                    } else {
-                        $db = getDB();
-                        $stmt = $db->prepare("
-                            INSERT INTO students (school_id, class_id, first_name, last_name, birth_date) 
-                            VALUES (?, ?, ?, ?, ?)
-                        ");
-                        
-                        if ($stmt->execute([$user['school_id'], $classId, $firstName, $lastName, $birthDate])) {
-                            $success = 'Schüler erfolgreich hinzugefügt.';
-                        } else {
-                            $errors[] = 'Fehler beim Hinzufügen des Schülers.';
-                        }
-                    }
-                }
-                break;
-
-            case 'update_student':
-                // Schüler bearbeiten
-                $studentId = (int)($_POST['student_id'] ?? 0);
-                $firstName = trim($_POST['edit_first_name'] ?? '');
-                $lastName = trim($_POST['edit_last_name'] ?? '');
-                $birthDate = formatDateForDB($_POST['edit_birth_date'] ?? '');
-                
-                if (empty($firstName) || empty($lastName)) {
-                    $errors[] = 'Vor- und Nachname sind erforderlich.';
-                } elseif (!$studentId) {
-                    $errors[] = 'Ungültige Schüler-ID.';
-                } else {
-                    $db = getDB();
-                    $stmt = $db->prepare("
-                        UPDATE students 
-                        SET first_name = ?, last_name = ?, birth_date = ?, updated_at = CURRENT_TIMESTAMP
-                        WHERE id = ? AND school_id = ?
-                    ");
-                    
-                    if ($stmt->execute([$firstName, $lastName, $birthDate, $studentId, $user['school_id']])) {
-                        $success = 'Schüler erfolgreich aktualisiert.';
-                    } else {
-                        $errors[] = 'Fehler beim Aktualisieren des Schülers.';
-                    }
-                }
-                break;
-                
-            case 'update_class':
-                // Klasse bearbeiten
-                $classId = (int)($_POST['edit_class_id'] ?? 0);
-                $className = trim($_POST['edit_class_name'] ?? '');
-                $description = trim($_POST['edit_description'] ?? '');
-                
-                if (empty($className)) {
-                    $errors[] = 'Klassenname ist erforderlich.';
-                } elseif (!$classId) {
-                    $errors[] = 'Ungültige Klassen-ID.';
-                } else {
-                    $db = getDB();
-                    $stmt = $db->prepare("
-                        UPDATE classes 
-                        SET name = ?, description = ?, updated_at = CURRENT_TIMESTAMP
-                        WHERE id = ? AND school_id = ?
-                    ");
-                    
-                    if ($stmt->execute([$className, $description, $classId, $user['school_id']])) {
-                        $success = 'Klasse erfolgreich aktualisiert.';
-                    } else {
-                        $errors[] = 'Fehler beim Aktualisieren der Klasse.';
-                    }
-                }
-                break;
                 // Schüler aus Datei hochladen
                 $classId = (int)($_POST['upload_class_id'] ?? 0);
                 $nameFormat = $_POST['name_format'] ?? 'firstname_lastname';
@@ -243,6 +162,88 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
                 break;
                 
+            case 'add_student':
+                // Schüler hinzufügen
+                $classId = (int)($_POST['class_id'] ?? 0);
+                $firstName = trim($_POST['first_name'] ?? '');
+                $lastName = trim($_POST['last_name'] ?? '');
+                
+                if (empty($firstName) || empty($lastName)) {
+                    $errors[] = 'Vor- und Nachname sind erforderlich.';
+                } elseif (!$classId) {
+                    $errors[] = 'Ungültige Klassen-ID.';
+                } else {
+                    // Prüfen ob Schülerlimit erreicht
+                    if (!canAddStudentToClass($classId)) {
+                        $errors[] = 'Maximale Schülerzahl für diese Klasse erreicht (' . $school['max_students_per_class'] . ').';
+                    } else {
+                        $db = getDB();
+                        $stmt = $db->prepare("
+                            INSERT INTO students (school_id, class_id, first_name, last_name) 
+                            VALUES (?, ?, ?, ?)
+                        ");
+                        
+                        if ($stmt->execute([$user['school_id'], $classId, $firstName, $lastName])) {
+                            $success = 'Schüler erfolgreich hinzugefügt.';
+                        } else {
+                            $errors[] = 'Fehler beim Hinzufügen des Schülers.';
+                        }
+                    }
+                }
+                break;
+
+            case 'update_student':
+                // Schüler bearbeiten
+                $studentId = (int)($_POST['student_id'] ?? 0);
+                $firstName = trim($_POST['edit_first_name'] ?? '');
+                $lastName = trim($_POST['edit_last_name'] ?? '');
+                
+                if (empty($firstName) || empty($lastName)) {
+                    $errors[] = 'Vor- und Nachname sind erforderlich.';
+                } elseif (!$studentId) {
+                    $errors[] = 'Ungültige Schüler-ID.';
+                } else {
+                    $db = getDB();
+                    $stmt = $db->prepare("
+                        UPDATE students 
+                        SET first_name = ?, last_name = ?, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = ? AND school_id = ?
+                    ");
+                    
+                    if ($stmt->execute([$firstName, $lastName, $studentId, $user['school_id']])) {
+                        $success = 'Schüler erfolgreich aktualisiert.';
+                    } else {
+                        $errors[] = 'Fehler beim Aktualisieren des Schülers.';
+                    }
+                }
+                break;
+                
+            case 'update_class':
+                // Klasse bearbeiten
+                $classId = (int)($_POST['edit_class_id'] ?? 0);
+                $className = trim($_POST['edit_class_name'] ?? '');
+                $description = trim($_POST['edit_description'] ?? '');
+                
+                if (empty($className)) {
+                    $errors[] = 'Klassenname ist erforderlich.';
+                } elseif (!$classId) {
+                    $errors[] = 'Ungültige Klassen-ID.';
+                } else {
+                    $db = getDB();
+                    $stmt = $db->prepare("
+                        UPDATE classes 
+                        SET name = ?, description = ?, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = ? AND school_id = ?
+                    ");
+                    
+                    if ($stmt->execute([$className, $description, $classId, $user['school_id']])) {
+                        $success = 'Klasse erfolgreich aktualisiert.';
+                    } else {
+                        $errors[] = 'Fehler beim Aktualisieren der Klasse.';
+                    }
+                }
+                break;
+                
             case 'delete_class':
                 $classId = (int)($_POST['class_id'] ?? 0);
                 if ($classId) {
@@ -330,8 +331,6 @@ if (isset($_GET['ajax'])) {
             exit;
     }
 }
-
-
 ?>
 <!DOCTYPE html>
 <html lang="de">
@@ -361,6 +360,8 @@ if (isset($_GET['ajax'])) {
             justify-content: space-between;
             align-items: center;
             backdrop-filter: blur(10px);
+            position: relative;
+            z-index: 100;
         }
 
         .header h1 {
@@ -635,27 +636,27 @@ if (isset($_GET['ajax'])) {
             margin-bottom: 0.5rem;
         }
 
+        /* Modal Styles mit höherem z-index */
         .modal {
             display: none;
             position: fixed;
-            z-index: 1000;
-            left: 0;
-            top: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0, 0, 0, 0.7);
-            backdrop-filter: blur(5px);
+            inset: 0;
+            z-index: 99999;
+            background: rgba(0, 0, 0, 0.8);
+            overflow-y: auto;
         }
 
         .modal-content {
-            background: rgba(0, 0, 0, 0.9);
-            border: 1px solid rgba(59, 130, 246, 0.3);
+            background: rgba(15, 23, 42, 0.98);
+            border: 2px solid #3b82f6;
             border-radius: 1rem;
             margin: 5% auto;
             padding: 2rem;
             width: 90%;
-            max-width: 500px;
-            backdrop-filter: blur(10px);
+            max-width: 800px;
+            position: relative;
+            z-index: 100000;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
         }
 
         .modal-header {
@@ -799,6 +800,7 @@ if (isset($_GET['ajax'])) {
             .modal-content {
                 margin: 10% auto;
                 padding: 1.5rem;
+                width: 95%;
             }
         }
     </style>
@@ -810,107 +812,6 @@ if (isset($_GET['ajax'])) {
             <div class="breadcrumb">
                 <a href="dashboard.php">Dashboard</a> / Klassenverwaltung
             </div>
-
-    <!-- Modal: Klasse bearbeiten -->
-    <div id="editClassModal" class="modal">
-        <div class="modal-content" style="max-width: 800px;">
-            <div class="modal-header">
-                <h3 class="modal-title">Klasse bearbeiten</h3>
-                <span class="close" onclick="closeModal('editClassModal')">&times;</span>
-            </div>
-            
-            <!-- Klassen-Info bearbeiten -->
-            <form method="POST" action="" style="margin-bottom: 2rem;">
-                <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
-                <input type="hidden" name="action" value="update_class">
-                <input type="hidden" id="edit_class_id" name="edit_class_id" value="">
-                
-                <div class="form-group">
-                    <label for="edit_class_name">Klassenname *</label>
-                    <input type="text" id="edit_class_name" name="edit_class_name" required>
-                </div>
-                
-                <div class="form-group">
-                    <label for="edit_description">Beschreibung</label>
-                    <textarea id="edit_description" name="edit_description" rows="2"></textarea>
-                </div>
-                
-                <div class="form-actions">
-                    <button type="submit" class="btn btn-success">Klasse aktualisieren</button>
-                </div>
-            </form>
-            
-            <hr style="border: 1px solid rgba(100, 116, 139, 0.3); margin: 2rem 0;">
-            
-            <!-- Schüler verwalten -->
-            <h4 style="color: #3b82f6; margin-bottom: 1rem;">👥 Schüler verwalten</h4>
-            
-            <!-- Neuen Schüler hinzufügen -->
-            <form method="POST" action="" style="margin-bottom: 1.5rem; padding: 1rem; background: rgba(34, 197, 94, 0.1); border: 1px solid rgba(34, 197, 94, 0.3); border-radius: 0.5rem;">
-                <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
-                <input type="hidden" name="action" value="add_student">
-                <input type="hidden" id="add_to_class_id" name="class_id" value="">
-                
-                <h5 style="color: #22c55e; margin-bottom: 0.5rem;">➕ Neuen Schüler hinzufügen</h5>
-                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 0.5rem; align-items: end;">
-                    <div class="form-group" style="margin-bottom: 0;">
-                        <input type="text" name="first_name" placeholder="Vorname" required>
-                    </div>
-                    <div class="form-group" style="margin-bottom: 0;">
-                        <input type="text" name="last_name" placeholder="Nachname" required>
-                    </div>
-                    <div class="form-group" style="margin-bottom: 0;">
-                        <input type="date" name="birth_date">
-                    </div>
-                    <button type="submit" class="btn btn-success btn-sm">Hinzufügen</button>
-                </div>
-            </form>
-            
-            <!-- Schülerliste -->
-            <div id="studentsList" style="max-height: 400px; overflow-y: auto;">
-                <!-- Wird dynamisch gefüllt -->
-            </div>
-        </div>
-    </div>
-
-    <!-- Modal: Schüler bearbeiten -->
-    <div id="editStudentModal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3 class="modal-title">Schüler bearbeiten</h3>
-                <span class="close" onclick="closeModal('editStudentModal')">&times;</span>
-            </div>
-            <form method="POST" action="">
-                <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
-                <input type="hidden" name="action" value="update_student">
-                <input type="hidden" id="edit_student_id" name="student_id" value="">
-                
-                <div class="form-group">
-                    <label for="edit_first_name">Vorname *</label>
-                    <input type="text" id="edit_first_name" name="edit_first_name" required>
-                </div>
-                
-                <div class="form-group">
-                    <label for="edit_last_name">Nachname *</label>
-                    <input type="text" id="edit_last_name" name="edit_last_name" required>
-                </div>
-                
-                <div class="form-group">
-                    <label for="edit_birth_date">Geburtsdatum</label>
-                    <input type="date" id="edit_birth_date" name="edit_birth_date">
-                </div>
-                
-                <div class="form-actions">
-                    <button type="button" onclick="closeModal('editStudentModal')" class="btn btn-secondary">
-                        Abbrechen
-                    </button>
-                    <button type="submit" class="btn btn-success">
-                        Speichern
-                    </button>
-                </div>
-            </form>
-        </div>
-    </div>
         </div>
         <a href="dashboard.php" class="btn btn-secondary">🏠 Dashboard</a>
     </div>
@@ -963,12 +864,8 @@ if (isset($_GET['ajax'])) {
                 </div>
                 
                 <div class="form-group" style="margin-bottom: 0;">
-                    <label>Schuljahr</label>
-                    <select name="school_year">
-                        <option value="2025/26">2025/26</option>
-                        <option value="2024/25">2024/25</option>
-                        <option value="2026/27">2026/27</option>
-                    </select>
+                    <label>Beschreibung</label>
+                    <input type="text" name="description" placeholder="Optional: Beschreibung">
                 </div>
                 
                 <button type="submit" class="btn btn-success">Klasse anlegen</button>
@@ -1076,36 +973,6 @@ if (isset($_GET['ajax'])) {
                             </div>
                         </div>
 
-                        <?php
-                        // Schüler für diese Klasse laden
-                        $stmt = $db->prepare("
-                            SELECT * FROM students 
-                            WHERE class_id = ? AND is_active = 1 
-                            ORDER BY last_name, first_name
-                        ");
-                        $stmt->execute([$class['id']]);
-                        $students = $stmt->fetchAll();
-                        ?>
-
-                        <?php if (!empty($students)): ?>
-                            <div class="students-list">
-                                <h4>Schüler (<?php echo count($students); ?>):</h4>
-                                <?php foreach (array_slice($students, 0, 3) as $student): ?>
-                                    <div class="student-item">
-                                        <span><?php echo escape($student['first_name'] . ' ' . $student['last_name']); ?></span>
-                                        <button onclick="deleteStudent(<?php echo $student['id']; ?>)" 
-                                                class="btn btn-danger btn-sm">🗑️</button>
-                                    </div>
-                                <?php endforeach; ?>
-                                
-                                <?php if (count($students) > 3): ?>
-                                    <div style="text-align: center; margin-top: 0.5rem; opacity: 0.7;">
-                                        ... und <?php echo count($students) - 3; ?> weitere
-                                    </div>
-                                <?php endif; ?>
-                            </div>
-                        <?php endif; ?>
-
                         <div class="class-actions">
                             <button onclick="openEditClassModal(<?php echo $class['id']; ?>)" 
                                     class="btn btn-primary btn-sm">
@@ -1122,6 +989,7 @@ if (isset($_GET['ajax'])) {
         <?php endif; ?>
     </div>
 
+    <!-- Modals am Ende des body-Tags -->
     <!-- Modal: Schüler hinzufügen -->
     <div id="addStudentModal" class="modal">
         <div class="modal-content">
@@ -1132,7 +1000,6 @@ if (isset($_GET['ajax'])) {
             <form method="POST" action="">
                 <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
                 <input type="hidden" name="action" value="add_student">
-                <input type="hidden" id="student_class_id" name="class_id" value="">
                 
                 <div class="form-group">
                     <label for="modal_class_select">Klasse</label>
@@ -1156,17 +1023,105 @@ if (isset($_GET['ajax'])) {
                     <input type="text" id="last_name" name="last_name" required>
                 </div>
                 
-                <div class="form-group">
-                    <label for="birth_date">Geburtsdatum</label>
-                    <input type="date" id="birth_date" name="birth_date">
-                </div>
-                
                 <div class="form-actions">
                     <button type="button" onclick="closeModal('addStudentModal')" class="btn btn-secondary">
                         Abbrechen
                     </button>
                     <button type="submit" class="btn btn-primary">
                         Schüler hinzufügen
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal: Klasse bearbeiten -->
+    <div id="editClassModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title">Klasse bearbeiten</h3>
+                <span class="close" onclick="closeModal('editClassModal')">&times;</span>
+            </div>
+            
+            <!-- Klassen-Info bearbeiten -->
+            <form method="POST" action="" style="margin-bottom: 2rem;">
+                <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
+                <input type="hidden" name="action" value="update_class">
+                <input type="hidden" id="edit_class_id" name="edit_class_id" value="">
+                
+                <div class="form-group">
+                    <label for="edit_class_name">Klassenname *</label>
+                    <input type="text" id="edit_class_name" name="edit_class_name" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="edit_description">Beschreibung</label>
+                    <textarea id="edit_description" name="edit_description" rows="2"></textarea>
+                </div>
+                
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-success">Klasse aktualisieren</button>
+                </div>
+            </form>
+            
+            <hr style="border: 1px solid rgba(100, 116, 139, 0.3); margin: 2rem 0;">
+            
+            <!-- Schüler verwalten -->
+            <h4 style="color: #3b82f6; margin-bottom: 1rem;">👥 Schüler verwalten</h4>
+            
+            <!-- Neuen Schüler hinzufügen -->
+            <form method="POST" action="" style="margin-bottom: 1.5rem; padding: 1rem; background: rgba(34, 197, 94, 0.1); border: 1px solid rgba(34, 197, 94, 0.3); border-radius: 0.5rem;">
+                <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
+                <input type="hidden" name="action" value="add_student">
+                <input type="hidden" id="add_to_class_id" name="class_id" value="">
+                
+                <h5 style="color: #22c55e; margin-bottom: 0.5rem;">➕ Neuen Schüler hinzufügen</h5>
+                <div style="display: grid; grid-template-columns: 1fr 1fr auto; gap: 0.5rem; align-items: end;">
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <input type="text" name="first_name" placeholder="Vorname" required>
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <input type="text" name="last_name" placeholder="Nachname" required>
+                    </div>
+                    <button type="submit" class="btn btn-success btn-sm">Hinzufügen</button>
+                </div>
+            </form>
+            
+            <!-- Schülerliste -->
+            <div id="studentsList" style="max-height: 400px; overflow-y: auto;">
+                <!-- Wird dynamisch gefüllt -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Schüler bearbeiten -->
+    <div id="editStudentModal" class="modal">
+        <div class="modal-content" style="max-width: 500px;">
+            <div class="modal-header">
+                <h3 class="modal-title">Schüler bearbeiten</h3>
+                <span class="close" onclick="closeModal('editStudentModal')">&times;</span>
+            </div>
+            <form method="POST" action="">
+                <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
+                <input type="hidden" name="action" value="update_student">
+                <input type="hidden" id="edit_student_id" name="student_id" value="">
+                
+                <div class="form-group">
+                    <label for="edit_first_name">Vorname *</label>
+                    <input type="text" id="edit_first_name" name="edit_first_name" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="edit_last_name">Nachname *</label>
+                    <input type="text" id="edit_last_name" name="edit_last_name" required>
+                </div>
+                
+                <div class="form-actions">
+                    <button type="button" onclick="closeModal('editStudentModal')" class="btn btn-secondary">
+                        Abbrechen
+                    </button>
+                    <button type="submit" class="btn btn-success">
+                        Speichern
                     </button>
                 </div>
             </form>
@@ -1189,7 +1144,6 @@ if (isset($_GET['ajax'])) {
         }
 
         function openAddStudentModalForClass(classId) {
-            document.getElementById('student_class_id').value = classId;
             document.getElementById('modal_class_select').value = classId;
             document.getElementById('addStudentModal').style.display = 'block';
         }
@@ -1203,12 +1157,20 @@ if (isset($_GET['ajax'])) {
             document.getElementById('add_to_class_id').value = classId;
             
             // Klassendaten laden und Formular befüllen
-            fetch('admin_klassen.php?ajax=get_class&id=' + classId)
-                .then(response => response.json())
+            fetch('?ajax=get_class&id=' + classId)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    return response.json();
+                })
                 .then(data => {
                     if (data.success) {
                         document.getElementById('edit_class_name').value = data.class.name || '';
                         document.getElementById('edit_description').value = data.class.description || '';
+                        loadStudentsList(classId);
+                    } else {
+                        console.error('Fehler:', data.error);
                         loadStudentsList(classId);
                     }
                 })
@@ -1220,8 +1182,13 @@ if (isset($_GET['ajax'])) {
         }
 
         function loadStudentsList(classId) {
-            fetch('admin_klassen.php?ajax=get_students&class_id=' + classId)
-                .then(response => response.json())
+            fetch('?ajax=get_students&class_id=' + classId)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    return response.json();
+                })
                 .then(data => {
                     if (data.success) {
                         const studentsList = document.getElementById('studentsList');
@@ -1231,11 +1198,15 @@ if (isset($_GET['ajax'])) {
                             html = '<div style="text-align: center; padding: 2rem; opacity: 0.7;">Noch keine Schüler in dieser Klasse</div>';
                         } else {
                             data.students.forEach(student => {
+                                // Escape single quotes in student names to avoid JavaScript errors
+                                const firstName = (student.first_name || '').replace(/'/g, "\\'");
+                                const lastName = (student.last_name || '').replace(/'/g, "\\'");
+                                
                                 html += `
                                     <div class="student-item" style="margin-bottom: 0.5rem;">
-                                        <span>${student.first_name} ${student.last_name}</span>
+                                        <span>${student.first_name || ''} ${student.last_name || ''}</span>
                                         <div style="display: flex; gap: 0.5rem;">
-                                            <button onclick="editStudent(${student.id}, '${student.first_name}', '${student.last_name}', '${student.birth_date || ''}')" 
+                                            <button onclick="editStudent(${student.id}, '${firstName}', '${lastName}')" 
                                                     class="btn btn-secondary btn-sm">✏️</button>
                                             <button onclick="deleteStudent(${student.id})" 
                                                     class="btn btn-danger btn-sm">🗑️</button>
@@ -1246,20 +1217,23 @@ if (isset($_GET['ajax'])) {
                         }
                         
                         studentsList.innerHTML = html;
+                    } else {
+                        console.error('Fehler:', data.error);
+                        document.getElementById('studentsList').innerHTML = 
+                            '<div style="color: #ef4444;">Fehler beim Laden der Schülerliste: ' + (data.error || 'Unbekannter Fehler') + '</div>';
                     }
                 })
                 .catch(error => {
                     console.error('Fehler beim Laden der Schülerliste:', error);
                     document.getElementById('studentsList').innerHTML = 
-                        '<div style="color: #ef4444;">Fehler beim Laden der Schülerliste</div>';
+                        '<div style="color: #ef4444;">Fehler beim Laden der Schülerliste: ' + error.message + '</div>';
                 });
         }
 
-        function editStudent(studentId, firstName, lastName, birthDate) {
+        function editStudent(studentId, firstName, lastName) {
             document.getElementById('edit_student_id').value = studentId;
             document.getElementById('edit_first_name').value = firstName;
             document.getElementById('edit_last_name').value = lastName;
-            document.getElementById('edit_birth_date').value = birthDate;
             document.getElementById('editStudentModal').style.display = 'block';
         }
 
@@ -1274,7 +1248,7 @@ if (isset($_GET['ajax'])) {
                 formData.append('class_id', classId);
                 formData.append('csrf_token', '<?php echo $_SESSION['csrf_token']; ?>');
 
-                fetch('admin_klassen.php', {
+                fetch('', {
                     method: 'POST',
                     body: formData
                 })
@@ -1283,7 +1257,7 @@ if (isset($_GET['ajax'])) {
                     location.reload();
                 })
                 .catch(error => {
-                    alert('Ein Fehler ist aufgetreten.');
+                    alert('Ein Fehler ist aufgetreten: ' + error.message);
                     console.error(error);
                 });
             }
@@ -1296,7 +1270,7 @@ if (isset($_GET['ajax'])) {
                 formData.append('student_id', studentId);
                 formData.append('csrf_token', '<?php echo $_SESSION['csrf_token']; ?>');
 
-                fetch('admin_klassen.php', {
+                fetch('', {
                     method: 'POST',
                     body: formData
                 })
@@ -1305,7 +1279,7 @@ if (isset($_GET['ajax'])) {
                     location.reload();
                 })
                 .catch(error => {
-                    alert('Ein Fehler ist aufgetreten.');
+                    alert('Ein Fehler ist aufgetreten: ' + error.message);
                     console.error(error);
                 });
             }
