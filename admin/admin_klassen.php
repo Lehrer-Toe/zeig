@@ -313,22 +313,32 @@ if (isset($_GET['ajax'])) {
             }
             exit;
             
-        case 'get_students':
-            $classId = (int)($_GET['class_id'] ?? 0);
-            if ($classId) {
-                $stmt = $db->prepare("
-                    SELECT * FROM students 
-                    WHERE class_id = ? AND school_id = ? AND is_active = 1 
-                    ORDER BY last_name, first_name
-                ");
-                $stmt->execute([$classId, $user['school_id']]);
-                $students = $stmt->fetchAll();
-                
-                echo json_encode(['success' => true, 'students' => $students]);
-            } else {
-                echo json_encode(['success' => false, 'error' => 'Ungültige Klassen-ID']);
+case 'get_students':
+    $classId = (int)($_GET['class_id'] ?? 0);
+    if ($classId) {
+        $stmt = $db->prepare("
+            SELECT * FROM students 
+            WHERE class_id = ? AND school_id = ? AND is_active = 1 
+            ORDER BY last_name ASC, first_name ASC
+        ");
+        $stmt->execute([$classId, $user['school_id']]);
+        $students = $stmt->fetchAll();
+        
+        // Debug: Sortierung in PHP sicherstellen
+        usort($students, function($a, $b) {
+            $result = strcasecmp($a['last_name'], $b['last_name']);
+            if ($result === 0) {
+                return strcasecmp($a['first_name'], $b['first_name']);
             }
-            exit;
+            return $result;
+        });
+        
+        echo json_encode(['success' => true, 'students' => $students]);
+    } else {
+        echo json_encode(['success' => false, 'error' => 'Ungültige Klassen-ID']);
+    }
+    exit;
+
     }
 }
 ?>
@@ -825,7 +835,7 @@ if (isset($_GET['ajax'])) {
 
         <?php if (!empty($errors)): ?>
             <div class="error-list">
-                <h4>⚠️ Fehler:</h4>
+                <h4⚠️ Fehler:</h4>
                 <ul>
                     <?php foreach ($errors as $error): ?>
                         <li><?php echo escape($error); ?></li>
@@ -1181,54 +1191,67 @@ if (isset($_GET['ajax'])) {
                 });
         }
 
-        function loadStudentsList(classId) {
-            fetch('?ajax=get_students&class_id=' + classId)
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error('Network response was not ok');
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    if (data.success) {
-                        const studentsList = document.getElementById('studentsList');
-                        let html = '';
-                        
-                        if (data.students.length === 0) {
-                            html = '<div style="text-align: center; padding: 2rem; opacity: 0.7;">Noch keine Schüler in dieser Klasse</div>';
-                        } else {
-                            data.students.forEach(student => {
-                                // Escape single quotes in student names to avoid JavaScript errors
-                                const firstName = (student.first_name || '').replace(/'/g, "\\'");
-                                const lastName = (student.last_name || '').replace(/'/g, "\\'");
-                                
-                                html += `
-                                    <div class="student-item" style="margin-bottom: 0.5rem;">
-                                        <span>${student.first_name || ''} ${student.last_name || ''}</span>
-                                        <div style="display: flex; gap: 0.5rem;">
-                                            <button onclick="editStudent(${student.id}, '${firstName}', '${lastName}')" 
-                                                    class="btn btn-secondary btn-sm">✏️</button>
-                                            <button onclick="deleteStudent(${student.id})" 
-                                                    class="btn btn-danger btn-sm">🗑️</button>
-                                        </div>
-                                    </div>
-                                `;
-                            });
+
+function loadStudentsList(classId) {
+    fetch('?ajax=get_students&class_id=' + classId)
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('Network response was not ok');
+            }
+            return response.json();
+        })
+        .then(data => {
+            if (data.success) {
+                const studentsList = document.getElementById('studentsList');
+                let html = '';
+                
+                if (data.students.length === 0) {
+                    html = '<div style="text-align: center; padding: 2rem; opacity: 0.7;">Noch keine Schüler in dieser Klasse</div>';
+                } else {
+                    // HIER IST DIE SORTIERUNG!
+                    data.students.sort((a, b) => {
+                        // Nach Nachname sortieren
+                        let compare = a.last_name.localeCompare(b.last_name, 'de');
+                        // Bei gleichem Nachnamen nach Vorname sortieren
+                        if (compare === 0) {
+                            compare = a.first_name.localeCompare(b.first_name, 'de');
                         }
+                        return compare;
+                    });
+                    
+                    data.students.forEach(student => {
+                        // Escape single quotes in student names to avoid JavaScript errors
+                        const firstName = (student.first_name || '').replace(/'/g, "\\'");
+                        const lastName = (student.last_name || '').replace(/'/g, "\\'");
                         
-                        studentsList.innerHTML = html;
-                    } else {
-                        console.error('Fehler:', data.error);
-                        document.getElementById('studentsList').innerHTML = 
-                            '<div style="color: #ef4444;">Fehler beim Laden der Schülerliste: ' + (data.error || 'Unbekannter Fehler') + '</div>';
-                    }
-                })
-                .catch(error => {
-                    console.error('Fehler beim Laden der Schülerliste:', error);
-                    document.getElementById('studentsList').innerHTML = 
-                        '<div style="color: #ef4444;">Fehler beim Laden der Schülerliste: ' + error.message + '</div>';
-                });
-        }
+                        html += `
+                            <div class="student-item" style="margin-bottom: 0.5rem;">
+                                <span>${student.last_name || ''}, ${student.first_name || ''}</span>
+                                <div style="display: flex; gap: 0.5rem;">
+                                    <button onclick="editStudent(${student.id}, '${firstName}', '${lastName}')" 
+                                            class="btn btn-secondary btn-sm">✏️</button>
+                                    <button onclick="deleteStudent(${student.id})" 
+                                            class="btn btn-danger btn-sm">🗑️</button>
+                                </div>
+                            </div>
+                        `;
+                    });
+                }
+                
+                studentsList.innerHTML = html;
+            } else {
+                console.error('Fehler:', data.error);
+                document.getElementById('studentsList').innerHTML = 
+                    '<div style="color: #ef4444;">Fehler beim Laden der Schülerliste: ' + (data.error || 'Unbekannter Fehler') + '</div>';
+            }
+        })
+        .catch(error => {
+            console.error('Fehler beim Laden der Schülerliste:', error);
+            document.getElementById('studentsList').innerHTML = 
+                '<div style="color: #ef4444;">Fehler beim Laden der Schülerliste: ' + error.message + '</div>';
+        });
+}
+
 
         function editStudent(studentId, firstName, lastName) {
             document.getElementById('edit_student_id').value = studentId;
