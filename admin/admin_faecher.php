@@ -1,18 +1,22 @@
 <?php
 require_once '../config.php';
 
-// Überprüfen, ob der Benutzer angemeldet ist und ein Admin ist
-if (!isset($_SESSION['user_id']) || ($_SESSION['user_type'] !== 'schuladmin' && $_SESSION['user_type'] !== 'superadmin')) {
-    header('Location: ../index.php');
-    exit();
+// Schuladmin-Zugriff prüfen
+$user = requireSchuladmin();
+requireValidSchoolLicense($user['school_id']);
+
+// PDO-Verbindung holen (vor allem anderen!)
+$db = getDB();
+
+// Schuldaten laden
+$school = getSchoolById($user['school_id']);
+if (!$school) {
+    die('Schule nicht gefunden.');
 }
 
 $user_id = $_SESSION['user_id'];
 $user_type = $_SESSION['user_type'];
 $school_id = $_SESSION['school_id'] ?? null;
-
-// PDO-Verbindung holen
-$db = getDB();
 
 // Funktion zum Generieren einer zufälligen Farbe
 function generateRandomColor() {
@@ -76,34 +80,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 }
                 break;
                 
-            case 'delete':
-                $id = intval($_POST['id'] ?? 0);
-                
-                // Prüfen, ob das Fach in Gruppen verwendet wird
-                $check_stmt = $db->prepare("SELECT COUNT(*) as count FROM group_subjects WHERE subject_id = ?");
-                $check_stmt->execute([$id]);
-                $result = $check_stmt->fetch();
-                
-                if ($result['count'] > 0) {
-                    throw new Exception('Dieses Fach wird noch in Gruppen verwendet und kann nicht gelöscht werden.');
-                }
-                
-                $stmt = $db->prepare("DELETE FROM subjects WHERE id = ? AND school_id = ?");
-                
-                if ($stmt->execute([$id, $school_id])) {
-                    $response['success'] = true;
-                    $response['message'] = 'Fach erfolgreich gelöscht.';
-                } else {
-                    throw new Exception('Fehler beim Löschen des Fachs.');
-                }
-                break;
-                
             case 'update_color':
                 $id = intval($_POST['id'] ?? 0);
                 $color = $_POST['color'] ?? '';
                 
-                if (!preg_match('/^#[0-9A-F]{6}$/i', $color)) {
-                    throw new Exception('Ungültiger Farbcode.');
+                if (empty($color)) {
+                    throw new Exception('Bitte wählen Sie eine Farbe.');
                 }
                 
                 $stmt = $db->prepare("UPDATE subjects SET color = ? WHERE id = ? AND school_id = ?");
@@ -113,6 +95,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     $response['message'] = 'Farbe erfolgreich aktualisiert.';
                 } else {
                     throw new Exception('Fehler beim Aktualisieren der Farbe.');
+                }
+                break;
+                
+            case 'delete':
+                $id = intval($_POST['id'] ?? 0);
+                
+                $stmt = $db->prepare("DELETE FROM subjects WHERE id = ? AND school_id = ?");
+                
+                if ($stmt->execute([$id, $school_id])) {
+                    $response['success'] = true;
+                    $response['message'] = 'Fach erfolgreich gelöscht.';
+                } else {
+                    throw new Exception('Fehler beim Löschen des Fachs.');
                 }
                 break;
         }
@@ -147,269 +142,308 @@ try {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Fächer verwalten - Schülerverwaltung</title>
+    <title>Fächerverwaltung - <?php echo APP_NAME; ?></title>
     <style>
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
         }
-        
+
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background-color: #0a0e27;
-            color: #e0e0e0;
-            line-height: 1.6;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #0f172a, #1e293b);
+            color: #e2e8f0;
             min-height: 100vh;
         }
-        
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 20px;
-        }
-        
+
         .header {
-            background: linear-gradient(135deg, #1e3c72, #2a5298);
-            color: white;
-            padding: 2rem;
-            margin-bottom: 2rem;
-            border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+            background: rgba(0, 0, 0, 0.3);
+            border-bottom: 1px solid rgba(59, 130, 246, 0.2);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            backdrop-filter: blur(10px);
         }
-        
+
         .header h1 {
-            font-size: 2rem;
-            margin-bottom: 0.5rem;
+            color: #3b82f6;
+            font-size: 1.5rem;
+            font-weight: 600;
         }
-        
-        .header p {
-            opacity: 0.9;
+
+        .breadcrumb {
+            font-size: 0.9rem;
+            opacity: 0.8;
+            margin-top: 0.25rem;
         }
-        
-        .subjects-grid {
-            display: grid;
-            gap: 1rem;
-            margin-bottom: 2rem;
-        }
-        
-        .subject-item {
-            background: #1a1f3a;
-            border: 1px solid #2a3450;
-            padding: 1rem;
-            border-radius: 8px;
-            display: flex;
-            align-items: center;
-            gap: 1rem;
-            transition: all 0.3s ease;
-        }
-        
-        .subject-item:hover {
-            background: #202545;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
-        }
-        
-        .subject-code {
-            font-weight: bold;
-            font-size: 1.2rem;
-            min-width: 60px;
-            text-align: center;
-            padding: 0.5rem;
-            border-radius: 4px;
-            background: rgba(255, 255, 255, 0.1);
-            text-shadow: 0 0 3px rgba(0, 0, 0, 0.5);
-        }
-        
-        .subject-name {
-            flex: 1;
-            font-size: 1rem;
-        }
-        
-        .subject-name input {
-            background: transparent;
-            border: 1px solid transparent;
-            color: #e0e0e0;
-            padding: 0.5rem;
-            width: 100%;
-            border-radius: 4px;
-            font-size: 1rem;
-            transition: all 0.3s ease;
-        }
-        
-        .subject-name input:focus {
-            outline: none;
-            background: rgba(255, 255, 255, 0.05);
-            border-color: #4a90e2;
-        }
-        
-        .color-picker-wrapper {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-        
-        .color-picker {
-            width: 50px;
-            height: 40px;
-            border: 2px solid #3a4560;
-            border-radius: 4px;
-            cursor: pointer;
-            background: none;
-            padding: 2px;
-        }
-        
-        .btn {
-            padding: 0.6rem 1.2rem;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            font-size: 0.95rem;
-            transition: all 0.3s ease;
+
+        .breadcrumb a {
+            color: #3b82f6;
             text-decoration: none;
-            display: inline-block;
-            font-weight: 500;
         }
-        
-        .btn-danger {
-            background: #dc3545;
-            color: white;
+
+        .breadcrumb a:hover {
+            text-decoration: underline;
         }
-        
-        .btn-danger:hover {
-            background: #c82333;
-            transform: translateY(-1px);
-            box-shadow: 0 2px 4px rgba(220, 53, 69, 0.3);
-        }
-        
-        .btn-primary {
-            background: #4a90e2;
-            color: white;
-        }
-        
-        .btn-primary:hover {
-            background: #357abd;
-            transform: translateY(-1px);
-            box-shadow: 0 2px 4px rgba(74, 144, 226, 0.3);
-        }
-        
-        .btn-success {
-            background: #28a745;
-            color: white;
-        }
-        
-        .btn-success:hover {
-            background: #218838;
-            transform: translateY(-1px);
-            box-shadow: 0 2px 4px rgba(40, 167, 69, 0.3);
-        }
-        
-        .add-subject-form {
-            background: #1a1f3a;
-            border: 1px solid #2a3450;
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
             padding: 2rem;
-            border-radius: 8px;
+        }
+
+        .page-header {
             margin-bottom: 2rem;
         }
-        
-        .add-subject-form h2 {
-            margin-bottom: 1.5rem;
-            color: #4a90e2;
-        }
-        
-        .form-row {
-            display: flex;
-            gap: 1rem;
-            align-items: flex-end;
-            flex-wrap: wrap;
-        }
-        
-        .form-group {
-            flex: 1;
-            min-width: 200px;
-        }
-        
-        .form-group label {
-            display: block;
+
+        .page-title {
+            font-size: 2rem;
+            color: #3b82f6;
             margin-bottom: 0.5rem;
-            color: #b0b0b0;
         }
-        
-        .form-group input {
-            width: 100%;
-            padding: 0.8rem;
-            border: 1px solid #3a4560;
-            background: #0d1128;
-            color: #e0e0e0;
-            border-radius: 5px;
-            font-size: 1rem;
-            transition: all 0.3s ease;
+
+        .page-subtitle {
+            opacity: 0.8;
+            line-height: 1.5;
         }
-        
-        .form-group input:focus {
-            outline: none;
-            border-color: #4a90e2;
-            background: #141830;
-        }
-        
-        .back-link {
+
+        .btn {
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 0.5rem;
+            text-decoration: none;
             display: inline-flex;
             align-items: center;
-            color: #4a90e2;
-            text-decoration: none;
-            margin-bottom: 1rem;
-            transition: color 0.3s ease;
+            gap: 0.5rem;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-weight: 500;
         }
-        
-        .back-link:hover {
-            color: #6ba3e5;
+
+        .btn-secondary {
+            background: rgba(100, 116, 139, 0.2);
+            color: #cbd5e1;
+            border: 1px solid rgba(100, 116, 139, 0.3);
         }
-        
-        .back-link::before {
-            content: "← ";
-            margin-right: 0.5rem;
+
+        .btn-secondary:hover {
+            background: rgba(100, 116, 139, 0.3);
+            transform: translateY(-1px);
         }
-        
+
+        .btn-primary {
+            background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+            color: white;
+            border: 1px solid rgba(59, 130, 246, 0.3);
+        }
+
+        .btn-primary:hover {
+            background: linear-gradient(135deg, #2563eb, #1e40af);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+        }
+
+        .btn-success {
+            background: linear-gradient(135deg, #10b981, #059669);
+            color: white;
+            border: 1px solid rgba(16, 185, 129, 0.3);
+        }
+
+        .btn-success:hover {
+            background: linear-gradient(135deg, #059669, #047857);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+        }
+
+        .btn-danger {
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+            color: white;
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+
+        .btn-danger:hover {
+            background: linear-gradient(135deg, #dc2626, #b91c1c);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+        }
+
         .alert {
             padding: 1rem;
-            border-radius: 5px;
-            margin-bottom: 1rem;
+            border-radius: 0.5rem;
+            margin-bottom: 2rem;
             display: none;
+            font-weight: 500;
         }
-        
+
         .alert-success {
-            background: rgba(40, 167, 69, 0.2);
-            border: 1px solid #28a745;
-            color: #28a745;
+            background: rgba(34, 197, 94, 0.1);
+            border: 1px solid rgba(34, 197, 94, 0.3);
+            color: #86efac;
         }
-        
+
         .alert-danger {
-            background: rgba(220, 53, 69, 0.2);
-            border: 1px solid #dc3545;
-            color: #dc3545;
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            color: #fca5a5;
         }
-        
-        .save-all-btn {
-            margin-top: 2rem;
+
+        .subjects-grid {
+            display: grid;
+            gap: 1.5rem;
+            margin-bottom: 3rem;
+        }
+
+        .subject-item {
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(100, 116, 139, 0.3);
+            padding: 1.5rem;
+            border-radius: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+        }
+
+        .subject-item:hover {
+            background: rgba(0, 0, 0, 0.4);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
+        }
+
+        .subject-code {
+            font-size: 1.5rem;
+            font-weight: bold;
+            min-width: 60px;
+            text-align: center;
+            background: rgba(0, 0, 0, 0.3);
+            padding: 0.75rem;
+            border-radius: 0.5rem;
+            border: 1px solid rgba(100, 116, 139, 0.3);
+        }
+
+        .subject-name {
+            flex: 1;
+        }
+
+        .subject-name input {
             width: 100%;
+            padding: 0.75rem;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(100, 116, 139, 0.3);
+            border-radius: 0.5rem;
+            color: #e2e8f0;
+            font-size: 1rem;
+            transition: all 0.3s ease;
         }
-        
+
+        .subject-name input:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+        }
+
+        .color-picker-wrapper {
+            position: relative;
+        }
+
+        .color-picker {
+            width: 50px;
+            height: 50px;
+            border: none;
+            border-radius: 50%;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            border: 3px solid rgba(100, 116, 139, 0.3);
+        }
+
+        .color-picker:hover {
+            transform: scale(1.1);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+
+        .add-subject-form {
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(100, 116, 139, 0.3);
+            padding: 2rem;
+            border-radius: 1rem;
+            margin-bottom: 2rem;
+            backdrop-filter: blur(10px);
+        }
+
+        .add-subject-form h2 {
+            color: #3b82f6;
+            margin-bottom: 1.5rem;
+            font-size: 1.5rem;
+        }
+
+        .form-row {
+            display: flex;
+            gap: 1.5rem;
+            align-items: end;
+            flex-wrap: wrap;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            min-width: 200px;
+            flex: 1;
+        }
+
+        .form-group label {
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+            color: #cbd5e1;
+            font-size: 0.9rem;
+        }
+
+        .form-group input {
+            padding: 0.75rem;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(100, 116, 139, 0.3);
+            border-radius: 0.5rem;
+            color: #e2e8f0;
+            font-size: 1rem;
+            transition: all 0.3s ease;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+        }
+
+        .save-all-btn {
+            width: 100%;
+            padding: 1rem;
+            font-size: 1.1rem;
+            font-weight: 600;
+        }
+
         @media (max-width: 768px) {
             .container {
-                padding: 10px;
+                padding: 1rem;
             }
             
             .header {
-                padding: 1.5rem;
+                padding: 1rem;
+                flex-direction: column;
+                gap: 1rem;
+                text-align: center;
             }
             
-            .header h1 {
+            .page-title {
                 font-size: 1.5rem;
             }
             
             .subject-item {
                 flex-direction: column;
                 text-align: center;
+                gap: 1rem;
             }
             
             .form-row {
@@ -423,19 +457,30 @@ try {
     </style>
 </head>
 <body>
+    <div class="header">
+        <div>
+            <h1>📚 Fächerverwaltung</h1>
+            <div class="breadcrumb">
+                <a href="dashboard.php">Dashboard</a> > Fächer verwalten
+            </div>
+        </div>
+        <a href="dashboard.php" class="btn btn-secondary">↩️ Zurück</a>
+    </div>
+
     <div class="container">
-        <a href="admin_dashboard.php" class="back-link">Zurück zum Dashboard</a>
-        
-        <div class="header">
-            <h1>Fächer verwalten</h1>
-            <p>Hier können Sie die verfügbaren Fächer bearbeiten.</p>
+        <div class="page-header">
+            <h1 class="page-title">Fächer verwalten</h1>
+            <p class="page-subtitle">
+                Verwalten Sie die verfügbaren Schulfächer für <?php echo htmlspecialchars($school['name']); ?>.
+            </p>
         </div>
         
         <div class="alert" id="alert"></div>
         
         <?php if (isset($show_migration_notice) && $show_migration_notice): ?>
         <div class="alert alert-danger" style="display: block;">
-            Die Fächer-Tabelle existiert noch nicht. Bitte führen Sie die Migration aus: <code>php migrate_subjects.php</code>
+            <strong>⚠️ Hinweis:</strong> Die Fächer-Tabelle existiert noch nicht. 
+            Bitte führen Sie die Migration aus: <code>php migrate_subjects.php</code>
         </div>
         <?php endif; ?>
         
@@ -449,37 +494,43 @@ try {
                     <input type="text" 
                            value="<?php echo htmlspecialchars($subject['full_name']); ?>" 
                            data-original="<?php echo htmlspecialchars($subject['full_name']); ?>"
-                           onchange="updateSubjectName(<?php echo $subject['id']; ?>, this.value)">
+                           onchange="updateSubjectName(<?php echo $subject['id']; ?>, this.value)"
+                           placeholder="Fachname eingeben">
                 </div>
                 <div class="color-picker-wrapper">
                     <input type="color" 
                            class="color-picker" 
                            value="<?php echo htmlspecialchars($subject['color']); ?>"
-                           onchange="updateSubjectColor(<?php echo $subject['id']; ?>, this.value)">
+                           onchange="updateSubjectColor(<?php echo $subject['id']; ?>, this.value)"
+                           title="Fachfarbe ändern">
                 </div>
-                <button class="btn btn-danger" onclick="deleteSubject(<?php echo $subject['id']; ?>)">Löschen</button>
+                <button class="btn btn-danger" onclick="deleteSubject(<?php echo $subject['id']; ?>)">
+                    🗑️ Löschen
+                </button>
             </div>
             <?php endforeach; ?>
         </div>
         
         <div class="add-subject-form">
-            <h2>Neues Fach hinzufügen</h2>
+            <h2>➕ Neues Fach hinzufügen</h2>
             <form id="addSubjectForm" onsubmit="addSubject(event)">
                 <div class="form-row">
                     <div class="form-group">
                         <label for="shortName">Kürzel (z.B. M)</label>
-                        <input type="text" id="shortName" name="short_name" required maxlength="10">
+                        <input type="text" id="shortName" name="short_name" required maxlength="10" placeholder="z.B. M, D, E">
                     </div>
                     <div class="form-group">
                         <label for="fullName">Fachname (z.B. Mathematik)</label>
-                        <input type="text" id="fullName" name="full_name" required maxlength="100">
+                        <input type="text" id="fullName" name="full_name" required maxlength="100" placeholder="z.B. Mathematik">
                     </div>
-                    <button type="submit" class="btn btn-success">Hinzufügen</button>
+                    <button type="submit" class="btn btn-success">✅ Hinzufügen</button>
                 </div>
             </form>
         </div>
         
-        <button class="btn btn-primary save-all-btn" onclick="saveAllChanges()">Alle Änderungen speichern</button>
+        <button class="btn btn-primary save-all-btn" onclick="saveAllChanges()">
+            💾 Alle Änderungen speichern
+        </button>
     </div>
     
     <script>
@@ -553,46 +604,50 @@ try {
         
         function addSubject(event) {
             event.preventDefault();
-            const form = event.target;
-            const formData = new FormData(form);
-            formData.append('action', 'add');
             
-            // Generate random color
-            const randomColor = '#' + Math.floor(Math.random()*16777215).toString(16).padStart(6, '0');
-            formData.append('color', randomColor);
+            const formData = new FormData(event.target);
+            formData.append('action', 'add');
             
             fetch('admin_faecher.php', {
                 method: 'POST',
-                body: new URLSearchParams(formData)
+                body: formData
             })
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
                     showAlert(data.message);
-                    form.reset();
                     
-                    // Add new subject to the grid
-                    const subjectHtml = `
-                        <div class="subject-item" data-id="${data.subject.id}">
-                            <div class="subject-code" style="color: ${data.subject.color}">
-                                ${data.subject.short_name}
-                            </div>
-                            <div class="subject-name">
-                                <input type="text" 
-                                       value="${data.subject.full_name}" 
-                                       data-original="${data.subject.full_name}"
-                                       onchange="updateSubjectName(${data.subject.id}, this.value)">
-                            </div>
-                            <div class="color-picker-wrapper">
-                                <input type="color" 
-                                       class="color-picker" 
-                                       value="${data.subject.color}"
-                                       onchange="updateSubjectColor(${data.subject.id}, this.value)">
-                            </div>
-                            <button class="btn btn-danger" onclick="deleteSubject(${data.subject.id})">Löschen</button>
+                    // Neues Fach zur Liste hinzufügen
+                    const grid = document.getElementById('subjectsGrid');
+                    const newItem = document.createElement('div');
+                    newItem.className = 'subject-item';
+                    newItem.setAttribute('data-id', data.subject.id);
+                    newItem.innerHTML = `
+                        <div class="subject-code" style="color: ${data.subject.color}">
+                            ${data.subject.short_name}
                         </div>
+                        <div class="subject-name">
+                            <input type="text" 
+                                   value="${data.subject.full_name}" 
+                                   data-original="${data.subject.full_name}"
+                                   onchange="updateSubjectName(${data.subject.id}, this.value)"
+                                   placeholder="Fachname eingeben">
+                        </div>
+                        <div class="color-picker-wrapper">
+                            <input type="color" 
+                                   class="color-picker" 
+                                   value="${data.subject.color}"
+                                   onchange="updateSubjectColor(${data.subject.id}, this.value)"
+                                   title="Fachfarbe ändern">
+                        </div>
+                        <button class="btn btn-danger" onclick="deleteSubject(${data.subject.id})">
+                            🗑️ Löschen
+                        </button>
                     `;
-                    document.getElementById('subjectsGrid').insertAdjacentHTML('beforeend', subjectHtml);
+                    grid.appendChild(newItem);
+                    
+                    // Formular zurücksetzen
+                    event.target.reset();
                 } else {
                     showAlert(data.message, 'danger');
                 }
