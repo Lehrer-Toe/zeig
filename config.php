@@ -14,16 +14,85 @@ $baseUrl = $protocol . $host . $scriptDir;
 // Trailing slash entfernen falls vorhanden
 define('BASE_URL', rtrim($baseUrl, '/'));
 
+// ROOT_PATH für Backup-Funktionen definieren
+define('ROOT_PATH', __DIR__);
+
 // Datenbank-Konfiguration
 define('DB_HOST', 'localhost');
-define('DB_NAME', 'd043fe53');  // Korrigierter Datenbankname
+define('DB_NAME', 'd043fe53');
 define('DB_USER', 'd043fe53');
 define('DB_PASS', '@Madita2011');
-define('DB_CHARSET', 'utf8mb4');  // Hinzugefügte Charset-Definition
+define('DB_CHARSET', 'utf8mb4');
 
 // Session und Security Konfiguration
 define('SESSION_LIFETIME', 3600 * 2); // 2 Stunden
 define('PASSWORD_MIN_LENGTH', 8);
+
+// FUNCTIONS.PHP LADEN
+$functionsPath = __DIR__ . '/php/functions.php';
+if (file_exists($functionsPath)) {
+    require_once $functionsPath;
+} else {
+    // Fallback: Kritische Funktionen direkt definieren falls functions.php fehlt
+    if (!function_exists('escape')) {
+        function escape($string) {
+            if ($string === null || $string === '') {
+                return '';
+            }
+            return htmlspecialchars($string, ENT_QUOTES, 'UTF-8');
+        }
+    }
+    
+    if (!function_exists('sendJsonResponse')) {
+        function sendJsonResponse($data, $status = 200) {
+            http_response_code($status);
+            header('Content-Type: application/json');
+            echo json_encode($data, JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+    }
+    
+    if (!function_exists('sendSuccessResponse')) {
+        function sendSuccessResponse($message = 'Erfolgreich', $data = null) {
+            $response = ['success' => true, 'message' => $message];
+            if ($data !== null) {
+                $response['data'] = $data;
+            }
+            sendJsonResponse($response);
+        }
+    }
+    
+    if (!function_exists('sendErrorResponse')) {
+        function sendErrorResponse($message = 'Ein Fehler ist aufgetreten', $status = 400) {
+            sendJsonResponse(['success' => false, 'message' => $message], $status);
+        }
+    }
+    
+    if (!function_exists('redirectWithMessage')) {
+        function redirectWithMessage($url, $message, $type = 'info') {
+            $_SESSION['flash_message'] = $message;
+            $_SESSION['flash_type'] = $type;
+            header('Location: ' . $url);
+            exit;
+        }
+    }
+    
+    if (!function_exists('getFlashMessage')) {
+        function getFlashMessage() {
+            if (isset($_SESSION['flash_message'])) {
+                $message = $_SESSION['flash_message'];
+                $type = $_SESSION['flash_type'] ?? 'info';
+                
+                unset($_SESSION['flash_message']);
+                unset($_SESSION['flash_type']);
+                
+                return ['message' => $message, 'type' => $type];
+            }
+            
+            return null;
+        }
+    }
+}
 
 // PDO-Verbindung mit Error Handling
 try {
@@ -59,13 +128,13 @@ function getCurrentUser() {
     
     switch ($_SESSION['user_type']) {
         case 'superadmin':
-            $stmt = $pdo->prepare("SELECT id, email, 'superadmin' as user_type, NULL as school_id FROM users WHERE id = ? AND user_type = 'superadmin'");
+            $stmt = $pdo->prepare("SELECT id, email, 'superadmin' as user_type, NULL as school_id, name FROM users WHERE id = ? AND user_type = 'superadmin'");
             break;
-        case 'schuladmin':  // Korrigierter user_type Name
-            $stmt = $pdo->prepare("SELECT id, email, 'schuladmin' as user_type, school_id FROM users WHERE id = ? AND user_type = 'schuladmin'");
+        case 'schuladmin':
+            $stmt = $pdo->prepare("SELECT id, email, 'schuladmin' as user_type, school_id, name FROM users WHERE id = ? AND user_type = 'schuladmin'");
             break;
-        case 'lehrer':  // Korrigierter user_type Name
-            $stmt = $pdo->prepare("SELECT id, email, 'lehrer' as user_type, school_id FROM users WHERE id = ? AND user_type = 'lehrer'");
+        case 'lehrer':
+            $stmt = $pdo->prepare("SELECT id, email, 'lehrer' as user_type, school_id, name FROM users WHERE id = ? AND user_type = 'lehrer'");
             break;
         case 'student':
             $stmt = $pdo->prepare("SELECT id, email, 'student' as user_type, school_id FROM students WHERE id = ?");
@@ -83,10 +152,10 @@ function redirectByUserType($userType) {
         case 'superadmin':
             header('Location: superadmin/dashboard.php');
             break;
-        case 'schuladmin':  // Korrigierter user_type Name
+        case 'schuladmin':
             header('Location: admin/dashboard.php');
             break;
-        case 'lehrer':  // Korrigierter user_type Name
+        case 'lehrer':
             header('Location: lehrer/dashboard.php');
             break;
         case 'student':
@@ -101,7 +170,7 @@ function redirectByUserType($userType) {
 function authenticateUser($email, $password) {
     global $pdo;
     
-    // Check Superadmin (falls superadmins Tabelle existiert)
+    // Check Superadmin
     try {
         $stmt = $pdo->prepare("SELECT id, email, password_hash as password, name FROM users WHERE email = ? AND user_type = 'superadmin' AND is_active = 1");
         $stmt->execute([$email]);
@@ -247,24 +316,12 @@ function generateCSRFToken() {
     return $_SESSION['csrf_token'];
 }
 
-// Flash Message Funktionen
-function getFlashMessage() {
-    if (isset($_SESSION['flash_message'])) {
-        $message = $_SESSION['flash_message'];
-        $type = $_SESSION['flash_type'] ?? 'info';
-        
-        unset($_SESSION['flash_message']);
-        unset($_SESSION['flash_type']);
-        
-        return ['message' => $message, 'type' => $type];
+// Flash Message Funktionen (falls nicht in functions.php definiert)
+if (!function_exists('setFlashMessage')) {
+    function setFlashMessage($message, $type = 'info') {
+        $_SESSION['flash_message'] = $message;
+        $_SESSION['flash_type'] = $type;
     }
-    
-    return null;
-}
-
-function setFlashMessage($message, $type = 'info') {
-    $_SESSION['flash_message'] = $message;
-    $_SESSION['flash_type'] = $type;
 }
 
 // Klassen-Funktionen
@@ -283,6 +340,19 @@ function canCreateClass($schoolId) {
 function checkSchoolLicense($schoolId) {
     $school = getSchoolById($schoolId);
     return $school && $school['is_active'] && $school['license_until'] >= date('Y-m-d');
+}
+
+// Schüler-Funktionen
+function getClassStudentsSimple($classId) {
+    $db = getDB();
+    $stmt = $db->prepare("
+        SELECT id, first_name, last_name 
+        FROM students 
+        WHERE class_id = ? AND is_active = 1
+        ORDER BY last_name, first_name
+    ");
+    $stmt->execute([$classId]);
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
 }
 
 // Fehlerbehandlung für Development
