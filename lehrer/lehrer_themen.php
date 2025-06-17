@@ -17,11 +17,11 @@ try {
     $db->query("SELECT 1 FROM topic_subjects LIMIT 1");
 } catch (Exception $e) {
     die('
-    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; background: #1e293b; color: white; border-radius: 10px;">
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; background: rgba(255,255,255,0.95); color: #001133; border-radius: 15px; box-shadow: 0 8px 32px rgba(0,0,0,0.2);">
         <h2 style="color: #ef4444;">⚠️ Datenbankfehler</h2>
         <p>Die Themen-Tabellen sind noch nicht erstellt.</p>
         <p>Bitte führen Sie zuerst die SQL-Befehle für die Datenbank-Erweiterung aus:</p>
-        <pre style="background: #0f172a; padding: 15px; border-radius: 5px; overflow: auto; font-size: 12px;">
+        <pre style="background: #f8f9fa; padding: 15px; border-radius: 5px; overflow: auto; font-size: 12px; border: 1px solid #ddd;">
 CREATE TABLE `topics` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
   `school_id` int(11) NOT NULL,
@@ -52,7 +52,7 @@ CREATE TABLE `topic_subjects` (
   FOREIGN KEY (`subject_id`) REFERENCES `subjects` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
         </pre>
-        <p><a href="dashboard.php" style="color: #3b82f6;">← Zurück zum Dashboard</a></p>
+        <p><a href="dashboard.php" style="color: #ff9900; text-decoration: none; font-weight: 600;">← Zurück zum Dashboard</a></p>
     </div>
     ');
 }
@@ -222,57 +222,16 @@ foreach ($topics as &$topic) {
 
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
-            background-color: #1a1a1a;
-            color: #e0e0e0;
+            background: linear-gradient(to bottom, #999999 0%, #ff9900 100%);
+            color: #001133;
             line-height: 1.6;
-        }
-
-        .header {
-            background: linear-gradient(135deg, #5b67ca 0%, #7b85ff 100%);
-            padding: 20px 40px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
-        }
-
-        .header-content {
-            max-width: 1400px;
-            margin: 0 auto;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        .header h1 {
-            color: white;
-            font-size: 28px;
-            font-weight: 600;
-        }
-
-        .header-info {
-            display: flex;
-            align-items: center;
-            gap: 30px;
-            color: white;
-        }
-
-        .back-btn {
-            background: rgba(255,255,255,0.2);
-            color: white;
-            padding: 8px 16px;
-            border: none;
-            border-radius: 6px;
-            text-decoration: none;
-            font-size: 14px;
-            transition: background-color 0.2s;
-        }
-
-        .back-btn:hover {
-            background: rgba(255,255,255,0.3);
+            min-height: 100vh;
         }
 
         .container {
             max-width: 1400px;
             margin: 0 auto;
-            padding: 40px;
+            padding: 20px 40px 40px;
         }
 
         .controls {
@@ -282,6 +241,10 @@ foreach ($topics as &$topic) {
             margin-bottom: 30px;
             gap: 20px;
             flex-wrap: wrap;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 20px;
+            border-radius: 15px;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
         }
 
         .filter-controls {
@@ -292,30 +255,32 @@ foreach ($topics as &$topic) {
 
         .toggle-group {
             display: flex;
-            background: #2d2d2d;
-            border-radius: 6px;
+            background: rgba(0, 43, 69, 0.1);
+            border-radius: 999px;
             padding: 4px;
-            border: 1px solid #444;
+            border: 1px solid rgba(0, 43, 69, 0.2);
         }
 
         .toggle-btn {
-            padding: 8px 16px;
+            padding: 10px 20px;
             background: transparent;
             border: none;
-            color: #e0e0e0;
+            color: #002b45;
             cursor: pointer;
-            border-radius: 4px;
-            transition: all 0.2s;
+            border-radius: 999px;
+            transition: all 0.3s ease;
             font-size: 14px;
+            font-weight: 500;
         }
 
         .toggle-btn.active {
-            background: #5b67ca;
+            background: #002b45;
             color: white;
+            box-shadow: 0 2px 8px rgba(0, 43, 69, 0.3);
         }
 
         .toggle-btn:hover:not(.active) {
-            background: #3d3d3d;
+            background: rgba(0, 43, 69, 0.1);
         }
 
         .toggle-btn:disabled {
@@ -324,81 +289,90 @@ foreach ($topics as &$topic) {
         }
 
         .select-control {
-            padding: 8px 12px;
-            background: #2d2d2d;
-            border: 1px solid #444;
-            border-radius: 6px;
-            color: white;
+            padding: 10px 15px;
+            background: rgba(255, 255, 255, 0.8);
+            border: 1px solid rgba(0, 43, 69, 0.2);
+            border-radius: 10px;
+            color: #002b45;
             cursor: pointer;
+            font-weight: 500;
         }
 
         .btn {
-            padding: 10px 20px;
+            padding: 12px 24px;
             border: none;
-            border-radius: 6px;
+            border-radius: 999px;
             cursor: pointer;
             font-size: 14px;
-            font-weight: 500;
+            font-weight: 600;
             text-decoration: none;
             display: inline-flex;
             align-items: center;
             gap: 8px;
-            transition: all 0.2s;
+            transition: all 0.3s ease;
         }
 
         .btn-primary {
-            background: #5b67ca;
-            color: white;
+            background: #ffffff;
+            color: #001133;
+            border: 2px solid #ff9900;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
         }
 
         .btn-primary:hover {
-            background: #4a56b8;
-            transform: translateY(-1px);
+            background: #ff9900;
+            color: white;
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(255, 153, 0, 0.3);
         }
 
         .btn-secondary {
-            background: #555;
-            color: #e0e0e0;
-            border: 1px solid #666;
+            background: rgba(255, 255, 255, 0.8);
+            color: #002b45;
+            border: 1px solid rgba(0, 43, 69, 0.3);
         }
 
         .btn-secondary:hover {
-            background: #666;
+            background: rgba(255, 255, 255, 0.95);
+            transform: translateY(-1px);
         }
 
         .btn-danger {
-            background: #e74c3c;
+            background: rgba(231, 76, 60, 0.9);
             color: white;
         }
 
         .btn-danger:hover {
             background: #c0392b;
+            transform: translateY(-1px);
         }
 
         .btn-sm {
-            padding: 6px 12px;
+            padding: 8px 16px;
             font-size: 12px;
         }
 
         .topics-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
-            gap: 20px;
+            grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+            gap: 25px;
             margin-top: 30px;
         }
 
         .topic-card {
-            background: #2d2d2d;
-            border: 1px solid #444;
-            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.95);
+            border: 2px solid transparent;
+            border-radius: 15px;
             padding: 25px;
-            transition: all 0.2s;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(10px);
         }
 
         .topic-card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 8px 25px rgba(91, 103, 202, 0.2);
-            border-color: #5b67ca;
+            transform: translateY(-5px);
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.2);
+            border-color: #ff9900;
         }
 
         .topic-header {
@@ -409,19 +383,19 @@ foreach ($topics as &$topic) {
         }
 
         .topic-title {
-            font-size: 18px;
-            font-weight: 600;
-            color: #5b67ca;
+            font-size: 20px;
+            font-weight: 700;
+            color: #002b45;
             margin-bottom: 8px;
         }
 
         .topic-meta {
             font-size: 12px;
-            color: #888;
+            color: #666;
         }
 
         .topic-description {
-            color: #b0b0b0;
+            color: #555;
             line-height: 1.6;
             margin-bottom: 15px;
         }
@@ -434,17 +408,17 @@ foreach ($topics as &$topic) {
         }
 
         .subject-tag {
-            padding: 4px 12px;
-            border-radius: 15px;
+            padding: 6px 12px;
+            border-radius: 20px;
             font-size: 12px;
-            font-weight: 500;
+            font-weight: 600;
             color: white;
             text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
         }
 
         .topic-actions {
             display: flex;
-            gap: 8px;
+            gap: 10px;
             justify-content: flex-end;
         }
 
@@ -466,14 +440,16 @@ foreach ($topics as &$topic) {
         }
 
         .modal-content {
-            background: #2d2d2d;
-            border: 1px solid #444;
-            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.98);
+            border: 2px solid #ff9900;
+            border-radius: 20px;
             padding: 30px;
             max-width: 600px;
             width: 90%;
             max-height: 90vh;
             overflow-y: auto;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
         }
 
         .modal-header {
@@ -484,21 +460,25 @@ foreach ($topics as &$topic) {
         }
 
         .modal-title {
-            font-size: 20px;
-            color: #5b67ca;
+            font-size: 24px;
+            color: #002b45;
+            font-weight: 700;
         }
 
         .close-modal {
             background: none;
             border: none;
-            color: #888;
-            font-size: 24px;
+            color: #666;
+            font-size: 28px;
             cursor: pointer;
             padding: 5px;
+            border-radius: 50%;
+            transition: all 0.2s;
         }
 
         .close-modal:hover {
             color: #e74c3c;
+            background: rgba(231, 76, 60, 0.1);
         }
 
         .form-group {
@@ -508,24 +488,25 @@ foreach ($topics as &$topic) {
         .form-label {
             display: block;
             margin-bottom: 8px;
-            font-weight: 500;
-            color: #e0e0e0;
+            font-weight: 600;
+            color: #002b45;
         }
 
         .form-control {
             width: 100%;
             padding: 12px;
-            background: #1a1a1a;
-            border: 1px solid #444;
-            border-radius: 6px;
-            color: white;
+            background: rgba(255, 255, 255, 0.9);
+            border: 2px solid rgba(0, 43, 69, 0.2);
+            border-radius: 10px;
+            color: #002b45;
             font-size: 14px;
+            transition: border-color 0.3s;
         }
 
         .form-control:focus {
             outline: none;
-            border-color: #5b67ca;
-            box-shadow: 0 0 0 3px rgba(91, 103, 202, 0.1);
+            border-color: #ff9900;
+            box-shadow: 0 0 0 3px rgba(255, 153, 0, 0.1);
         }
 
         textarea.form-control {
@@ -535,23 +516,24 @@ foreach ($topics as &$topic) {
 
         .subjects-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
             gap: 10px;
         }
 
         .subject-checkbox {
             display: flex;
             align-items: center;
-            padding: 10px;
-            background: #1a1a1a;
-            border: 1px solid #444;
-            border-radius: 6px;
+            padding: 12px;
+            background: rgba(255, 255, 255, 0.8);
+            border: 2px solid rgba(0, 43, 69, 0.2);
+            border-radius: 10px;
             cursor: pointer;
-            transition: all 0.2s;
+            transition: all 0.3s ease;
         }
 
         .subject-checkbox:hover {
-            background: #222;
+            background: rgba(255, 255, 255, 0.95);
+            border-color: #ff9900;
         }
 
         .subject-checkbox input {
@@ -559,8 +541,8 @@ foreach ($topics as &$topic) {
         }
 
         .subject-checkbox.checked {
-            border-color: #5b67ca;
-            background: rgba(91, 103, 202, 0.1);
+            border-color: #ff9900;
+            background: rgba(255, 153, 0, 0.1);
         }
 
         .modal-actions {
@@ -573,32 +555,40 @@ foreach ($topics as &$topic) {
         .empty-state {
             text-align: center;
             padding: 60px 40px;
-            color: #888;
+            color: #666;
+            background: rgba(255, 255, 255, 0.9);
+            border-radius: 15px;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
         }
 
         .empty-state-icon {
-            font-size: 64px;
+            font-size: 72px;
             margin-bottom: 20px;
             opacity: 0.5;
         }
 
+        .empty-state h3 {
+            color: #002b45;
+            margin: 20px 0;
+        }
+
         .flash-message {
-            padding: 12px 20px;
-            border-radius: 6px;
+            padding: 15px 20px;
+            border-radius: 10px;
             margin-bottom: 20px;
-            font-weight: 500;
+            font-weight: 600;
         }
 
         .flash-success {
-            background: rgba(39, 174, 96, 0.1);
-            border: 1px solid rgba(39, 174, 96, 0.3);
-            color: #2ecc71;
+            background: rgba(34, 197, 94, 0.1);
+            border: 2px solid rgba(34, 197, 94, 0.3);
+            color: #15803d;
         }
 
         .flash-error {
             background: rgba(231, 76, 60, 0.1);
-            border: 1px solid rgba(231, 76, 60, 0.3);
-            color: #e74c3c;
+            border: 2px solid rgba(231, 76, 60, 0.3);
+            color: #dc2626;
         }
 
         @media (max-width: 768px) {
@@ -628,15 +618,6 @@ foreach ($topics as &$topic) {
     </style>
 </head>
 <body>
-    <div class="header">
-        <div class="header-content">
-            <h1>📚 Themen verwalten</h1>
-            <div class="header-info">
-                <a href="dashboard.php" class="back-btn">← Zurück zum Dashboard</a>
-            </div>
-        </div>
-    </div>
-
     <div class="container">
         <div id="flash-messages"></div>
 
