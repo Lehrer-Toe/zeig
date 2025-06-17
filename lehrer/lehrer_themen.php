@@ -33,6 +33,27 @@ try {
         <p>Die Themen-Tabellen sind noch nicht vollständig erstellt oder die neuen Felder fehlen.</p>
         <p>Bitte führen Sie zuerst diese SQL-Befehle aus:</p>
         <pre style="background: #f8f9fa; padding: 15px; border-radius: 5px; overflow: auto; font-size: 12px; border: 1px solid #ddd;">
+-- Falls Tabellen nicht existieren:
+CREATE TABLE IF NOT EXISTS `topics` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `school_id` int(11) NOT NULL,
+  `teacher_id` int(11) NOT NULL,
+  `title` varchar(255) NOT NULL,
+  `description` text DEFAULT NULL,
+  `short_description` varchar(240) DEFAULT NULL,
+  `is_global` tinyint(1) DEFAULT 0,
+  `is_active` tinyint(1) DEFAULT 1,
+  `created_at` timestamp NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  PRIMARY KEY (`id`),
+  KEY `idx_school_id` (`school_id`),
+  KEY `idx_teacher_id` (`teacher_id`),
+  KEY `idx_active` (`is_active`),
+  KEY `idx_global` (`is_global`),
+  FOREIGN KEY (`school_id`) REFERENCES `schools` (`id`) ON DELETE CASCADE,
+  FOREIGN KEY (`teacher_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
 -- Falls nur die neuen Felder fehlen:
 ALTER TABLE `topics` 
 ADD COLUMN IF NOT EXISTS `short_description` VARCHAR(240) DEFAULT NULL COMMENT \'240 Zeichen Kurzbeschreibung\',
@@ -44,6 +65,11 @@ CREATE INDEX IF NOT EXISTS idx_topics_global ON topics(is_global, is_active);
         <p><a href="dashboard.php" style="color: #ff9900; text-decoration: none; font-weight: 600;">← Zurück zum Dashboard</a></p>
     </div>
     ');
+}
+
+// CSRF-Token generieren falls nicht vorhanden
+if (!isset($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 }
 
 // AJAX Requests verarbeiten
@@ -82,7 +108,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $db->beginTransaction();
                 
                 // Thema erstellen
-                $stmt = $db->prepare("INSERT INTO topics (school_id, teacher_id, title, description, short_description, is_global) VALUES (?, ?, ?, ?, ?, ?)");
+                $stmt = $db->prepare("INSERT INTO topics (school_id, teacher_id, title, description, short_description, is_global, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())");
                 $stmt->execute([$school_id, $teacher_id, $title, $description, $short_description, $is_global]);
                 $topic_id = $db->lastInsertId();
                 
@@ -156,7 +182,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     throw new Exception('Thema nicht gefunden oder keine Berechtigung.');
                 }
                 
-                $stmt = $db->prepare("DELETE FROM topics WHERE id = ?");
+                // Soft delete verwenden
+                $stmt = $db->prepare("UPDATE topics SET is_active = 0, updated_at = NOW() WHERE id = ?");
                 $stmt->execute([$topic_id]);
                 
                 $response['success'] = true;
@@ -204,8 +231,9 @@ $stmt = $db->prepare("SELECT * FROM subjects WHERE school_id = ? AND is_active =
 $stmt->execute([$school_id]);
 $subjects = $stmt->fetchAll();
 
-// Themen abrufen mit Fächern
-$sort_by = $_GET['sort'] ?? 'title';
+// Filter für globale/lokale Ansicht
+$filter = $_GET['filter'] ?? 'school';
+$sort_by = $_GET['sort'] ?? 'alphabetic';
 
 $order_clause = "ORDER BY t.title ASC";
 switch ($sort_by) {
@@ -217,14 +245,29 @@ switch ($sort_by) {
         break;
 }
 
-$stmt = $db->prepare("
-    SELECT t.*, u.name as teacher_name
-    FROM topics t 
-    LEFT JOIN users u ON t.teacher_id = u.id
-    WHERE t.school_id = ? AND t.teacher_id = ? AND t.is_active = 1
-    $order_clause
-");
-$stmt->execute([$school_id, $teacher_id]);
+// Themen abrufen basierend auf Filter
+if ($filter === 'global') {
+    // Globale Ansicht: Alle globalen Themen anzeigen
+    $stmt = $db->prepare("
+        SELECT t.*, u.name as teacher_name, s.name as school_name
+        FROM topics t 
+        LEFT JOIN users u ON t.teacher_id = u.id
+        LEFT JOIN schools s ON t.school_id = s.id
+        WHERE t.is_global = 1 AND t.is_active = 1
+        $order_clause
+    ");
+    $stmt->execute();
+} else {
+    // Lokale Ansicht: Nur eigene Themen
+    $stmt = $db->prepare("
+        SELECT t.*, u.name as teacher_name
+        FROM topics t 
+        LEFT JOIN users u ON t.teacher_id = u.id
+        WHERE t.school_id = ? AND t.teacher_id = ? AND t.is_active = 1
+        $order_clause
+    ");
+    $stmt->execute([$school_id, $teacher_id]);
+}
 $topics = $stmt->fetchAll();
 
 // Fächer für jedes Thema laden
@@ -813,8 +856,8 @@ foreach ($topics as &$topic) {
         <div class="controls">
             <div class="filter-controls">
                 <div class="toggle-group">
-                    <button class="toggle-btn active" data-filter="school">🏫 Schule</button>
-                    <button class="toggle-btn" data-filter="global" disabled title="Funktion in Entwicklung">🌍 Global</button>
+                    <button class="toggle-btn <?= $filter === 'school' ? 'active' : '' ?>" data-filter="school" onclick="changeFilter('school')">🏫 Schule</button>
+                    <button class="toggle-btn <?= $filter === 'global' ? 'active' : '' ?>" data-filter="global" onclick="changeFilter('global')">🌍 Global</button>
                 </div>
 
                 <div class="view-toggle">
@@ -823,9 +866,9 @@ foreach ($topics as &$topic) {
                 </div>
 
                 <select class="select-control" id="sortSelect">
-                    <option value="alphabetic" <?= isset($_GET['sort']) && $_GET['sort'] === 'alphabetic' ? 'selected' : '' ?>>Alphabetisch</option>
-                    <option value="date" <?= isset($_GET['sort']) && $_GET['sort'] === 'date' ? 'selected' : '' ?>>Nach Erstelldatum</option>
-                    <option value="updated" <?= isset($_GET['sort']) && $_GET['sort'] === 'updated' ? 'selected' : '' ?>>Zuletzt geändert</option>
+                    <option value="alphabetic" <?= $sort_by === 'alphabetic' ? 'selected' : '' ?>>Alphabetisch</option>
+                    <option value="date" <?= $sort_by === 'date' ? 'selected' : '' ?>>Nach Erstelldatum</option>
+                    <option value="updated" <?= $sort_by === 'updated' ? 'selected' : '' ?>>Zuletzt geändert</option>
                 </select>
             </div>
 
@@ -838,11 +881,13 @@ foreach ($topics as &$topic) {
             <?php if (empty($topics)): ?>
                 <div class="empty-state" style="grid-column: 1 / -1;">
                     <div class="empty-state-icon">📚</div>
-                    <h3>Noch keine Themen vorhanden</h3>
-                    <p>Erstellen Sie Ihr erstes Projektthema für die Schüler.</p>
-                    <button class="btn btn-primary" onclick="openCreateModal()" style="margin-top: 20px;">
-                        ➕ Erstes Thema erstellen
-                    </button>
+                    <h3><?= $filter === 'global' ? 'Keine globalen Themen gefunden' : 'Noch keine Themen vorhanden' ?></h3>
+                    <p><?= $filter === 'global' ? 'Es sind noch keine globalen Themen von anderen Lehrern verfügbar.' : 'Erstellen Sie Ihr erstes Projektthema für die Schüler.' ?></p>
+                    <?php if ($filter === 'school'): ?>
+                        <button class="btn btn-primary" onclick="openCreateModal()" style="margin-top: 20px;">
+                            ➕ Erstes Thema erstellen
+                        </button>
+                    <?php endif; ?>
                 </div>
             <?php else: ?>
                 <?php foreach ($topics as $topic): ?>
@@ -858,6 +903,12 @@ foreach ($topics as &$topic) {
                                             <?php endif; ?>
                                         </div>
                                         <div class="topic-meta">
+                                            <?php if ($filter === 'global' && isset($topic['school_name'])): ?>
+                                                🏫 <?= htmlspecialchars($topic['school_name']) ?><br>
+                                            <?php endif; ?>
+                                            <?php if ($filter === 'global' && $topic['teacher_id'] != $teacher_id): ?>
+                                                👤 <?= htmlspecialchars($topic['teacher_name']) ?><br>
+                                            <?php endif; ?>
                                             Erstellt: <?= date('d.m.Y', strtotime($topic['created_at'])) ?>
                                             <?php if ($topic['updated_at'] !== $topic['created_at']): ?>
                                                 | Geändert: <?= date('d.m.Y', strtotime($topic['updated_at'])) ?>
@@ -888,14 +939,16 @@ foreach ($topics as &$topic) {
                             </div>
                         </div>
 
-                        <div class="topic-actions">
-                            <button class="btn btn-secondary btn-sm" onclick="editTopic(<?= $topic['id'] ?>)">
-                                ✏️ Bearbeiten
-                            </button>
-                            <button class="btn btn-danger btn-sm" onclick="deleteTopic(<?= $topic['id'] ?>)">
-                                🗑️ Löschen
-                            </button>
-                        </div>
+                        <?php if ($filter === 'school' || $topic['teacher_id'] == $teacher_id): ?>
+                            <div class="topic-actions">
+                                <button class="btn btn-secondary btn-sm" onclick="editTopic(<?= $topic['id'] ?>)">
+                                    ✏️ Bearbeiten
+                                </button>
+                                <button class="btn btn-danger btn-sm" onclick="deleteTopic(<?= $topic['id'] ?>)">
+                                    🗑️ Löschen
+                                </button>
+                            </div>
+                        <?php endif; ?>
                     </div>
                 <?php endforeach; ?>
             <?php endif; ?>
@@ -965,7 +1018,6 @@ foreach ($topics as &$topic) {
     <script>
         let isEditing = false;
         let currentView = 'grid'; // Standard: Kachel-Ansicht
-        const csrfToken = '<?= $_SESSION['csrf_token'] ?>';
 
         // View Toggle funktionalität
         document.querySelectorAll('.view-btn').forEach(btn => {
@@ -990,6 +1042,13 @@ foreach ($topics as &$topic) {
             } else {
                 container.className = 'topics-grid';
             }
+        }
+
+        // Filter ändern
+        function changeFilter(filter) {
+            const url = new URL(window.location);
+            url.searchParams.set('filter', filter);
+            window.location.href = url.toString();
         }
 
         // Character Counter
@@ -1040,23 +1099,19 @@ foreach ($topics as &$topic) {
                 const formData = new FormData();
                 formData.append('action', 'get_topic');
                 formData.append('topic_id', topicId);
-                formData.append('csrf_token', csrfToken);
+                formData.append('csrf_token', '<?= $_SESSION['csrf_token'] ?>');
 
                 const response = await fetch('', {
                     method: 'POST',
                     body: formData
                 });
 
-                if (!response.ok) {
-                    throw new Error('Server-Fehler: ' + response.status);
-                }
-
                 const result = await response.json();
                 
                 if (result.success) {
                     const topic = result.topic;
                     document.getElementById('topicId').value = topic.id;
-                    document.getElementById('topicTitle').value = topic.title || '';
+                    document.getElementById('topicTitle').value = topic.title;
                     document.getElementById('shortDescription').value = topic.short_description || '';
                     document.getElementById('topicDescription').value = topic.description || '';
                     document.getElementById('isGlobal').checked = topic.is_global == 1;
@@ -1077,7 +1132,6 @@ foreach ($topics as &$topic) {
                     showFlashMessage(result.message, 'error');
                 }
             } catch (error) {
-                console.error('Edit Error:', error);
                 showFlashMessage('Fehler beim Laden der Themendaten: ' + error.message, 'error');
             }
         }
@@ -1091,35 +1145,26 @@ foreach ($topics as &$topic) {
                 const formData = new FormData();
                 formData.append('action', 'delete_topic');
                 formData.append('topic_id', topicId);
-                formData.append('csrf_token', csrfToken);
+                formData.append('csrf_token', '<?= $_SESSION['csrf_token'] ?>');
 
                 const response = await fetch('', {
                     method: 'POST',
                     body: formData
                 });
 
-                if (!response.ok) {
-                    throw new Error('Server-Fehler: ' + response.status);
-                }
-
                 const result = await response.json();
                 
                 if (result.success) {
                     showFlashMessage(result.message, 'success');
-                    const topicElement = document.querySelector(`[data-topic-id="${topicId}"]`);
-                    if (topicElement) {
-                        topicElement.remove();
-                    }
+                    document.querySelector(`[data-topic-id="${topicId}"]`).remove();
                     
-                    // Prüfen ob keine Themen mehr vorhanden
                     if (document.querySelectorAll('.topic-card').length === 0) {
-                        setTimeout(() => location.reload(), 1000);
+                        location.reload();
                     }
                 } else {
                     showFlashMessage(result.message, 'error');
                 }
             } catch (error) {
-                console.error('Delete Error:', error);
                 showFlashMessage('Fehler beim Löschen: ' + error.message, 'error');
             }
         }
@@ -1133,19 +1178,9 @@ foreach ($topics as &$topic) {
             submitBtn.disabled = true;
 
             try {
-                const formData = new FormData();
+                const formData = new FormData(this);
                 const action = isEditing ? 'update_topic' : 'create_topic';
                 formData.append('action', action);
-                formData.append('csrf_token', csrfToken);
-                
-                if (isEditing) {
-                    formData.append('topic_id', document.getElementById('topicId').value);
-                }
-                
-                formData.append('title', document.getElementById('topicTitle').value);
-                formData.append('description', document.getElementById('topicDescription').value);
-                formData.append('short_description', document.getElementById('shortDescription').value);
-                formData.append('is_global', document.getElementById('isGlobal').checked ? '1' : '0');
                 
                 const selectedSubjects = [];
                 document.querySelectorAll('.subject-checkbox input:checked').forEach(input => {
@@ -1158,10 +1193,6 @@ foreach ($topics as &$topic) {
                     body: formData
                 });
 
-                if (!response.ok) {
-                    throw new Error('Server-Fehler: ' + response.status);
-                }
-
                 const result = await response.json();
                 
                 if (result.success) {
@@ -1172,7 +1203,6 @@ foreach ($topics as &$topic) {
                     showFlashMessage(result.message, 'error');
                 }
             } catch (error) {
-                console.error('Submit Error:', error);
                 showFlashMessage('Fehler beim Speichern: ' + error.message, 'error');
             } finally {
                 submitBtn.textContent = originalText;
@@ -1181,10 +1211,7 @@ foreach ($topics as &$topic) {
         });
 
         document.querySelectorAll('.subject-checkbox').forEach(label => {
-            label.addEventListener('click', function(e) {
-                // Verhindern, dass das Event zweimal ausgelöst wird
-                if (e.target.type === 'checkbox') return;
-                
+            label.addEventListener('click', function() {
                 const checkbox = this.querySelector('input');
                 checkbox.checked = !checkbox.checked;
                 this.classList.toggle('checked', checkbox.checked);
@@ -1224,9 +1251,7 @@ foreach ($topics as &$topic) {
         });
 
         // Initial char counter update
-        document.addEventListener('DOMContentLoaded', function() {
-            updateCharCounter();
-        });
+        updateCharCounter();
     </script>
 </body>
 </html>
