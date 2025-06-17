@@ -330,7 +330,6 @@ if (!empty($topicIds)) {
     }
 }
 ?>
-
 <!DOCTYPE html>
 <html lang="de">
 <head>
@@ -1058,313 +1057,280 @@ if (!empty($topicIds)) {
     </div>
 
     <script>
-        let isEditing = false;
-        let currentView = 'grid'; // Standard: Kachel-Ansicht
-
-        // View Toggle funktionalität
-        document.querySelectorAll('.view-btn').forEach(btn => {
-            btn.addEventListener('click', function() {
-                const view = this.dataset.view;
-                switchView(view);
-            });
-        });
-
-        function switchView(view) {
-            currentView = view;
+        (function() {
+            'use strict';
             
-            // Button states aktualisieren
-            document.querySelectorAll('.view-btn').forEach(btn => {
-                btn.classList.toggle('active', btn.dataset.view === view);
-            });
+            // Globale Variablen für diesen Scope
+            let isEditing = false;
+            let currentView = 'grid';
             
-            // Container Klasse ändern
-            const container = document.getElementById('topicsContainer');
-            if (view === 'list') {
-                container.className = 'topics-list';
-            } else {
-                container.className = 'topics-grid';
-            }
-        }
-
-        // Filter ändern
-        function changeFilter(filter) {
-            const currentPath = window.location.pathname;
-            const searchParams = new URLSearchParams(window.location.search);
-            searchParams.set('filter', filter);
-            
-            if (currentPath.includes('dashboard.php')) {
-                searchParams.set('page', 'themen');
+            // AJAX URL definieren - abhängig vom Kontext
+            function getAjaxUrl() {
+                const path = window.location.pathname;
+                if (path.includes('dashboard.php')) {
+                    return 'lehrer_themen.php';
+                }
+                return '';
             }
             
-            window.location.href = currentPath + '?' + searchParams.toString();
-        }
-
-        // Character Counter
-        function updateCharCounter() {
-            const textarea = document.getElementById('shortDescription');
-            const counter = document.getElementById('charCounter');
+            // Funktionen im globalen Scope verfügbar machen
+            window.switchView = function(view) {
+                currentView = view;
+                document.querySelectorAll('.view-btn').forEach(btn => {
+                    btn.classList.toggle('active', btn.dataset.view === view);
+                });
+                const container = document.getElementById('topicsContainer');
+                container.className = view === 'list' ? 'topics-list' : 'topics-grid';
+            }
             
-            if (textarea && counter) {
-                const length = textarea.value.length;
-                counter.textContent = `${length} / 240`;
+            window.changeFilter = function(filter) {
+                const searchParams = new URLSearchParams(window.location.search);
+                searchParams.set('filter', filter);
+                if (window.location.pathname.includes('dashboard.php')) {
+                    searchParams.set('page', 'themen');
+                }
+                window.location.href = window.location.pathname + '?' + searchParams.toString();
+            }
+            
+            window.updateCharCounter = function() {
+                const textarea = document.getElementById('shortDescription');
+                const counter = document.getElementById('charCounter');
+                if (textarea && counter) {
+                    const length = textarea.value.length;
+                    counter.textContent = length + ' / 240';
+                    counter.className = 'char-counter';
+                    if (length > 200) counter.classList.add('warning');
+                    if (length > 240) counter.classList.add('error');
+                }
+            }
+            
+            window.openCreateModal = function() {
+                document.getElementById('modalTitle').textContent = 'Neues Thema';
+                document.getElementById('topicForm').reset();
+                document.getElementById('topicId').value = '';
+                document.getElementById('submitBtn').textContent = 'Erstellen';
+                isEditing = false;
                 
-                counter.className = 'char-counter';
-                if (length > 200) {
-                    counter.classList.add('warning');
-                }
-                if (length > 240) {
-                    counter.classList.add('error');
+                document.querySelectorAll('.subject-checkbox').forEach(label => {
+                    label.classList.remove('checked');
+                    label.querySelector('input').checked = false;
+                });
+                
+                updateCharCounter();
+                document.getElementById('topicModal').classList.add('show');
+            }
+            
+            window.closeModal = function() {
+                document.getElementById('topicModal').classList.remove('show');
+            }
+            
+            window.showFlashMessage = function(message, type) {
+                const flashContainer = document.getElementById('flash-messages');
+                const flash = document.createElement('div');
+                flash.className = 'flash-message flash-' + type;
+                flash.textContent = message;
+                flashContainer.appendChild(flash);
+                setTimeout(() => { flash.remove(); }, 5000);
+            }
+            
+            window.editTopic = async function(topicId) {
+                const url = getAjaxUrl();
+                console.log('Edit topic - URL:', url);
+                
+                document.getElementById('modalTitle').textContent = 'Thema bearbeiten';
+                document.getElementById('submitBtn').textContent = 'Aktualisieren';
+                isEditing = true;
+                
+                try {
+                    const formData = new FormData();
+                    formData.append('action', 'get_topic');
+                    formData.append('topic_id', topicId);
+                    formData.append('csrf_token', '<?= $_SESSION['csrf_token'] ?>');
+
+                    const response = await fetch(url, {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    if (!response.ok) throw new Error('Server-Fehler: ' + response.status);
+
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        const topic = result.topic;
+                        document.getElementById('topicId').value = topic.id;
+                        document.getElementById('topicTitle').value = topic.title;
+                        document.getElementById('shortDescription').value = topic.short_description || '';
+                        document.getElementById('isGlobal').checked = topic.is_global == 1;
+                        
+                        document.querySelectorAll('.subject-checkbox').forEach(label => {
+                            label.classList.remove('checked');
+                            const checkbox = label.querySelector('input');
+                            const isChecked = topic.subject_ids.includes(parseInt(checkbox.value));
+                            checkbox.checked = isChecked;
+                            if (isChecked) label.classList.add('checked');
+                        });
+                        
+                        updateCharCounter();
+                        document.getElementById('topicModal').classList.add('show');
+                    } else {
+                        showFlashMessage(result.message, 'error');
+                    }
+                } catch (error) {
+                    showFlashMessage('Fehler: ' + error.message, 'error');
+                    console.error('Edit error:', error);
                 }
             }
-        }
-
-        function openCreateModal() {
-            document.getElementById('modalTitle').textContent = 'Neues Thema';
-            document.getElementById('topicForm').reset();
-            document.getElementById('topicId').value = '';
-            document.getElementById('submitBtn').textContent = 'Erstellen';
-            isEditing = false;
             
-            document.querySelectorAll('.subject-checkbox').forEach(label => {
-                label.classList.remove('checked');
-                label.querySelector('input').checked = false;
-            });
+            window.deleteTopic = async function(topicId) {
+                const url = getAjaxUrl();
+                console.log('Delete topic - URL:', url);
+                
+                if (!confirm('Sind Sie sicher, dass Sie dieses Thema löschen möchten?')) return;
+
+                try {
+                    const formData = new FormData();
+                    formData.append('action', 'delete_topic');
+                    formData.append('topic_id', topicId);
+                    formData.append('csrf_token', '<?= $_SESSION['csrf_token'] ?>');
+
+                    const response = await fetch(url, {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    if (!response.ok) throw new Error('Server-Fehler: ' + response.status);
+
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        showFlashMessage(result.message, 'success');
+                        document.querySelector('[data-topic-id="' + topicId + '"]').remove();
+                        
+                        if (document.querySelectorAll('.topic-card').length === 0) {
+                            setTimeout(() => { window.location.reload(); }, 1000);
+                        }
+                    } else {
+                        showFlashMessage(result.message, 'error');
+                    }
+                } catch (error) {
+                    showFlashMessage('Fehler: ' + error.message, 'error');
+                    console.error('Delete error:', error);
+                }
+            }
             
-            updateCharCounter();
-            document.getElementById('topicModal').classList.add('show');
-        }
+            // Event Listener nach DOM-Laden
+            document.addEventListener('DOMContentLoaded', function() {
+                // Form Submit Handler
+                const form = document.getElementById('topicForm');
+                if (form) {
+                    form.addEventListener('submit', async function(e) {
+                        e.preventDefault();
+                        
+                        const url = getAjaxUrl();
+                        console.log('Form submit - URL:', url);
+                        
+                        const submitBtn = document.getElementById('submitBtn');
+                        const originalText = submitBtn.textContent;
+                        submitBtn.textContent = 'Speichern...';
+                        submitBtn.disabled = true;
 
-        function closeModal() {
-            document.getElementById('topicModal').classList.remove('show');
-        }
+                        try {
+                            const formData = new FormData(this);
+                            formData.append('action', isEditing ? 'update_topic' : 'create_topic');
+                            
+                            const selectedSubjects = [];
+                            document.querySelectorAll('.subject-checkbox input:checked').forEach(input => {
+                                selectedSubjects.push(input.value);
+                            });
+                            
+                            console.log('Selected subjects:', selectedSubjects);
+                            
+                            if (selectedSubjects.length === 0) {
+                                showFlashMessage('Bitte wählen Sie mindestens ein Fach aus.', 'error');
+                                submitBtn.textContent = originalText;
+                                submitBtn.disabled = false;
+                                return;
+                            }
+                            
+                            formData.append('subject_ids', JSON.stringify(selectedSubjects));
+                            formData.set('is_global', document.getElementById('isGlobal').checked ? '1' : '0');
 
-        async function editTopic(topicId) {
-            console.log('Edit topic - using AJAX URL:', ajaxUrl);
-            document.getElementById('modalTitle').textContent = 'Thema bearbeiten';
-            document.getElementById('submitBtn').textContent = 'Aktualisieren';
-            isEditing = true;
-            
-            try {
-                const formData = new FormData();
-                formData.append('action', 'get_topic');
-                formData.append('topic_id', topicId);
-                formData.append('csrf_token', '<?= $_SESSION['csrf_token'] ?>');
+                            const response = await fetch(url, {
+                                method: 'POST',
+                                body: formData
+                            });
 
-                const response = await fetch('lehrer_themen.php', {
-                    method: 'POST',
-                    body: formData
+                            if (!response.ok) throw new Error('Server-Fehler: ' + response.status);
+
+                            const result = await response.json();
+                            
+                            if (result.success) {
+                                showFlashMessage(result.message, 'success');
+                                closeModal();
+                                setTimeout(() => { window.location.reload(); }, 1000);
+                            } else {
+                                showFlashMessage(result.message, 'error');
+                            }
+                        } catch (error) {
+                            showFlashMessage('Fehler: ' + error.message, 'error');
+                            console.error('Submit error:', error);
+                        } finally {
+                            submitBtn.textContent = originalText;
+                            submitBtn.disabled = false;
+                        }
+                    });
+                }
+
+                // View Toggle Handler
+                document.querySelectorAll('.view-btn').forEach(btn => {
+                    btn.addEventListener('click', function() {
+                        switchView(this.dataset.view);
+                    });
                 });
 
-                if (!response.ok) {
-                    throw new Error('Server-Fehler: ' + response.status);
-                }
-
-                const contentType = response.headers.get("content-type");
-                if (!contentType || !contentType.includes("application/json")) {
-                    throw new Error("Server hat kein JSON zurückgegeben");
-                }
-
-                const result = await response.json();
-                
-                if (result.success) {
-                    const topic = result.topic;
-                    console.log('Topic data:', topic);
-                    console.log('Subject IDs:', topic.subject_ids);
+                // Checkbox Handler
+                document.querySelectorAll('.subject-checkbox').forEach(label => {
+                    const checkbox = label.querySelector('input');
                     
-                    document.getElementById('topicId').value = topic.id;
-                    document.getElementById('topicTitle').value = topic.title;
-                    document.getElementById('shortDescription').value = topic.short_description || '';
-                    document.getElementById('isGlobal').checked = topic.is_global == 1;
-                    
-                    // Fächer setzen
-                    document.querySelectorAll('.subject-checkbox').forEach(label => {
-                        label.classList.remove('checked');
-                        const checkbox = label.querySelector('input');
-                        const isChecked = topic.subject_ids.includes(checkbox.value) || topic.subject_ids.includes(parseInt(checkbox.value));
-                        checkbox.checked = isChecked;
-                        if (isChecked) {
-                            label.classList.add('checked');
+                    label.addEventListener('click', function(e) {
+                        if (e.target.tagName !== 'INPUT') {
+                            e.preventDefault();
+                            checkbox.checked = !checkbox.checked;
+                            this.classList.toggle('checked', checkbox.checked);
                         }
                     });
                     
-                    updateCharCounter();
-                    document.getElementById('topicModal').classList.add('show');
-                } else {
-                    showFlashMessage(result.message, 'error');
-                }
-            } catch (error) {
-                showFlashMessage('Fehler beim Laden der Themendaten: ' + error.message, 'error');
-                console.error('Edit error:', error);
-            }
-        }
-
-        async function deleteTopic(topicId) {
-            console.log('Delete topic - using AJAX URL:', ajaxUrl);
-            if (!confirm('Sind Sie sicher, dass Sie dieses Thema löschen möchten?')) {
-                return;
-            }
-
-            try {
-                const formData = new FormData();
-                formData.append('action', 'delete_topic');
-                formData.append('topic_id', topicId);
-                formData.append('csrf_token', '<?= $_SESSION['csrf_token'] ?>');
-
-                const response = await fetch('lehrer_themen.php', {
-                    method: 'POST',
-                    body: formData
+                    checkbox.addEventListener('change', function() {
+                        label.classList.toggle('checked', this.checked);
+                    });
                 });
 
-                if (!response.ok) {
-                    throw new Error('Server-Fehler: ' + response.status);
+                // Sort Handler
+                const sortSelect = document.getElementById('sortSelect');
+                if (sortSelect) {
+                    sortSelect.addEventListener('change', function() {
+                        const searchParams = new URLSearchParams(window.location.search);
+                        searchParams.set('sort', this.value);
+                        window.location.href = window.location.pathname + '?' + searchParams.toString();
+                    });
                 }
 
-                const contentType = response.headers.get("content-type");
-                if (!contentType || !contentType.includes("application/json")) {
-                    throw new Error("Server hat kein JSON zurückgegeben");
-                }
+                // Modal Handler
+                document.getElementById('topicModal').addEventListener('click', function(e) {
+                    if (e.target === this) closeModal();
+                });
 
-                const result = await response.json();
-                
-                if (result.success) {
-                    showFlashMessage(result.message, 'success');
-                    document.querySelector(`[data-topic-id="${topicId}"]`).remove();
-                    
-                    if (document.querySelectorAll('.topic-card').length === 0) {
-                        setTimeout(() => {
-                            window.location.href = window.location.href;
-                        }, 1000);
+                document.addEventListener('keydown', function(e) {
+                    if (e.key === 'Escape' && document.getElementById('topicModal').classList.contains('show')) {
+                        closeModal();
                     }
-                } else {
-                    showFlashMessage(result.message, 'error');
-                }
-            } catch (error) {
-                showFlashMessage('Fehler beim Löschen: ' + error.message, 'error');
-                console.error('Delete error:', error);
-            }
-        }
-
-        document.getElementById('topicForm').addEventListener('submit', async function(e) {
-            e.preventDefault();
-            console.log('Submit form - using AJAX URL:', ajaxUrl);
-            
-            const submitBtn = document.getElementById('submitBtn');
-            const originalText = submitBtn.textContent;
-            submitBtn.textContent = 'Speichern...';
-            submitBtn.disabled = true;
-
-            try {
-                const formData = new FormData(this);
-                const action = isEditing ? 'update_topic' : 'create_topic';
-                formData.append('action', action);
-                
-                const selectedSubjects = [];
-                document.querySelectorAll('.subject-checkbox input:checked').forEach(input => {
-                    selectedSubjects.push(input.value);
-                });
-                
-                if (selectedSubjects.length === 0) {
-                    showFlashMessage('Bitte wählen Sie mindestens ein Fach aus.', 'error');
-                    submitBtn.textContent = originalText;
-                    submitBtn.disabled = false;
-                    return;
-                }
-                
-                formData.append('subject_ids', JSON.stringify(selectedSubjects));
-                
-                // is_global explizit setzen
-                const isGlobal = document.getElementById('isGlobal').checked ? '1' : '0';
-                formData.set('is_global', isGlobal);
-
-                const response = await fetch('', {
-                    method: 'POST',
-                    body: formData
                 });
 
-                if (!response.ok) {
-                    throw new Error('Server-Fehler: ' + response.status);
-                }
-
-                const contentType = response.headers.get("content-type");
-                if (!contentType || !contentType.includes("application/json")) {
-                    throw new Error("Server hat kein JSON zurückgegeben");
-                }
-
-                const result = await response.json();
-                
-                if (result.success) {
-                    showFlashMessage(result.message, 'success');
-                    closeModal();
-                    // Seite mit aktuellen Parametern neu laden
-                    setTimeout(() => {
-                        window.location.href = window.location.href;
-                    }, 1000);
-                } else {
-                    showFlashMessage(result.message, 'error');
-                }
-            } catch (error) {
-                showFlashMessage('Fehler beim Speichern: ' + error.message, 'error');
-                console.error('Save error:', error);
-            } finally {
-                submitBtn.textContent = originalText;
-                submitBtn.disabled = false;
-            }
-        });
-
-        document.querySelectorAll('.subject-checkbox').forEach(label => {
-            const checkbox = label.querySelector('input');
-            
-            // Label-Klick Handler
-            label.addEventListener('click', function(e) {
-                if (e.target.tagName !== 'INPUT') {
-                    e.preventDefault();
-                    checkbox.checked = !checkbox.checked;
-                    this.classList.toggle('checked', checkbox.checked);
-                }
+                updateCharCounter();
+                console.log('Themen-Modul geladen und bereit!');
             });
-            
-            // Checkbox-Change Handler
-            checkbox.addEventListener('change', function(e) {
-                label.classList.toggle('checked', this.checked);
-            });
-        });
-
-        document.getElementById('sortSelect').addEventListener('change', function() {
-            const sortBy = this.value;
-            const currentPath = window.location.pathname;
-            const searchParams = new URLSearchParams(window.location.search);
-            searchParams.set('sort', sortBy);
-            
-            window.location.href = currentPath + '?' + searchParams.toString();
-        });
-
-        function showFlashMessage(message, type) {
-            const flashContainer = document.getElementById('flash-messages');
-            const flash = document.createElement('div');
-            flash.className = `flash-message flash-${type}`;
-            flash.textContent = message;
-            
-            flashContainer.appendChild(flash);
-            
-            setTimeout(() => {
-                flash.remove();
-            }, 5000);
-        }
-
-        document.getElementById('topicModal').addEventListener('click', function(e) {
-            if (e.target === this) {
-                closeModal();
-            }
-        });
-
-        document.addEventListener('keydown', function(e) {
-            if (e.key === 'Escape' && document.getElementById('topicModal').classList.contains('show')) {
-                closeModal();
-            }
-        });
-
-        // Initial char counter update
-        updateCharCounter();
+        })();
     </script>
 </body>
 </html>
