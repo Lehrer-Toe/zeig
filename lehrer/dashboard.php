@@ -161,69 +161,104 @@ if (!$teacher) {
             margin-bottom: 30px;
         }
 
-        .stats-grid {
+        .modules-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
             gap: 20px;
-            margin-bottom: 30px;
         }
 
-        .stat-card {
+        .module-card {
             background: #3d3d3d;
-            padding: 20px;
+            border: 2px solid transparent;
             border-radius: 12px;
-            text-align: center;
-        }
-
-        .stat-number {
-            font-size: 32px;
-            font-weight: bold;
-            color: #5b67ca;
-            margin-bottom: 8px;
-        }
-
-        .stat-label {
-            color: #b0b0b0;
-            font-size: 14px;
-        }
-
-        .quick-actions {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 20px;
-        }
-
-        .action-card {
-            background: #3d3d3d;
             padding: 25px;
-            border-radius: 12px;
             text-decoration: none;
             color: #e0e0e0;
-            transition: transform 0.2s, box-shadow 0.2s;
-            border: 2px solid transparent;
-        }
-
-        .action-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 8px 25px rgba(91, 103, 202, 0.3);
-            border-color: #5b67ca;
-        }
-
-        .action-icon {
-            font-size: 40px;
-            margin-bottom: 15px;
+            transition: all 0.3s ease;
             display: block;
         }
 
-        .action-title {
-            font-size: 18px;
-            font-weight: 600;
-            margin-bottom: 8px;
+        .module-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 25px rgba(91, 103, 202, 0.3);
+            border-color: #5b67ca;
+            text-decoration: none;
+            color: #e0e0e0;
         }
 
-        .action-description {
-            color: #b0b0b0;
+        .module-card.disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .module-card.disabled:hover {
+            transform: none;
+            box-shadow: none;
+            border-color: transparent;
+        }
+
+        .module-header {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 15px;
+        }
+
+        .module-icon {
+            font-size: 40px;
+            width: 60px;
+            height: 60px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(91, 103, 202, 0.2);
+            border-radius: 12px;
+            border: 2px solid rgba(91, 103, 202, 0.3);
+        }
+
+        .module-title {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 5px;
+            color: #5b67ca;
+        }
+
+        .module-subtitle {
             font-size: 14px;
+            opacity: 0.8;
+        }
+
+        .module-description {
+            font-size: 14px;
+            line-height: 1.5;
+            margin-bottom: 15px;
+            opacity: 0.8;
+        }
+
+        .module-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+        }
+
+        .status-badge {
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 500;
+        }
+
+        .status-available {
+            background: rgba(39, 174, 96, 0.2);
+            color: #2ecc71;
+            border: 1px solid rgba(39, 174, 96, 0.3);
+        }
+
+        .status-development {
+            background: rgba(243, 156, 18, 0.2);
+            color: #f39c12;
+            border: 1px solid rgba(243, 156, 18, 0.3);
         }
 
         @media (max-width: 768px) {
@@ -239,6 +274,10 @@ if (!$teacher) {
             
             .nav-tabs {
                 flex-wrap: wrap;
+            }
+
+            .modules-grid {
+                grid-template-columns: 1fr;
             }
         }
     </style>
@@ -299,16 +338,23 @@ if (!$teacher) {
                     echo '<h2>📚 Themen verwalten</h2>';
                     echo '<p style="margin-bottom: 30px; color: #b0b0b0;">Hier können Sie Unterrichtsthemen erstellen und verwalten, die später für Bewertungen verwendet werden.</p>';
                     
-                    echo '<div style="background: #3d3d3d; padding: 30px; border-radius: 12px; margin-bottom: 20px;">';
-                    echo '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">';
-                    echo '<h3 style="color: #5b67ca;">Meine Themen</h3>';
-                    echo '<button style="background: #5b67ca; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer;">+ Neues Thema</button>';
+                    echo '<div class="modules-grid">';
+                    
+                    // Link zur separaten Themen-Seite
+                    echo '<a href="lehrer_themen.php" class="module-card">';
+                    echo '<div class="module-header">';
+                    echo '<div class="module-icon">📚</div>';
+                    echo '<div>';
+                    echo '<div class="module-title">Themen-Manager</div>';
+                    echo '<div class="module-subtitle">Vollständige Themenverwaltung</div>';
                     echo '</div>';
-                    echo '<div style="text-align: center; padding: 40px; color: #888;">';
-                    echo '<span style="font-size: 48px;">📚</span>';
-                    echo '<h3 style="margin: 20px 0;">Noch keine Themen vorhanden</h3>';
-                    echo '<p>Erstellen Sie Ihr erstes Unterrichtsthema, um mit der Bewertung zu beginnen.</p>';
                     echo '</div>';
+                    echo '<div class="module-description">Erstellen, bearbeiten und verwalten Sie alle Projektthemen für Ihre Schüler. Ordnen Sie Fächer zu und organisieren Sie Ihre Unterrichtsinhalte.</div>';
+                    echo '<div class="module-status">';
+                    echo '<span class="status-badge status-available">✅ Verfügbar</span>';
+                    echo '</div>';
+                    echo '</a>';
+                    
                     echo '</div>';
                     break;
                     
@@ -333,137 +379,58 @@ if (!$teacher) {
                     echo '<h2>⭐ Schüler bewerten</h2>';
                     echo '<p style="margin-bottom: 30px; color: #b0b0b0;">Bewerten Sie Ihre Schüler anhand der definierten Kriterien und Themen.</p>';
                     
-                    echo '<div style="background: #3d3d3d; padding: 30px; border-radius: 12px; margin-bottom: 20px;">';
-                    echo '<h3 style="color: #5b67ca; margin-bottom: 20px;">Bewertung durchführen</h3>';
-                    echo '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 30px;">';
-                    echo '<div>';
-                    echo '<label style="display: block; margin-bottom: 8px; color: #e0e0e0;">Klasse auswählen</label>';
-                    echo '<select style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #555; background: #2d2d2d; color: #e0e0e0;">';
-                    echo '<option>Bitte Klasse auswählen...</option>';
-                    echo '</select>';
-                    echo '</div>';
-                    echo '<div>';
-                    echo '<label style="display: block; margin-bottom: 8px; color: #e0e0e0;">Thema auswählen</label>';
-                    echo '<select style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #555; background: #2d2d2d; color: #e0e0e0;">';
-                    echo '<option>Bitte Thema auswählen...</option>';
-                    echo '</select>';
-                    echo '</div>';
-                    echo '</div>';
+                    echo '<div style="background: #3d3d3d; padding: 30px; border-radius: 12px;">';
                     echo '<div style="text-align: center; padding: 40px; color: #888;">';
                     echo '<span style="font-size: 48px;">⭐</span>';
-                    echo '<h3 style="margin: 20px 0;">Bewertung starten</h3>';
-                    echo '<p>Wählen Sie eine Klasse und ein Thema aus, um mit der Bewertung zu beginnen.</p>';
+                    echo '<h3 style="margin: 20px 0;">Bewertungssystem in Vorbereitung</h3>';
+                    echo '<p>Das Bewertungsmodul wird nach der Erstellung von Themen und Gruppen verfügbar sein.</p>';
                     echo '</div>';
                     echo '</div>';
                     break;
-                    
+
                 case 'vorlagen':
                     echo '<h2>📋 Bewertungsvorlagen</h2>';
-                    echo '<p style="margin-bottom: 30px; color: #b0b0b0;">Erstellen und verwalten Sie Bewertungsvorlagen mit verschiedenen Kriterien.</p>';
+                    echo '<p style="margin-bottom: 30px; color: #b0b0b0;">Erstellen und verwalten Sie Bewertungsvorlagen für wiederkehrende Aufgaben.</p>';
                     
-                    echo '<div style="background: #3d3d3d; padding: 30px; border-radius: 12px; margin-bottom: 20px;">';
-                    echo '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">';
-                    echo '<h3 style="color: #5b67ca;">Meine Vorlagen</h3>';
-                    echo '<button style="background: #5b67ca; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer;">+ Neue Vorlage</button>';
-                    echo '</div>';
+                    echo '<div style="background: #3d3d3d; padding: 30px; border-radius: 12px;">';
                     echo '<div style="text-align: center; padding: 40px; color: #888;">';
                     echo '<span style="font-size: 48px;">📋</span>';
-                    echo '<h3 style="margin: 20px 0;">Noch keine Vorlagen vorhanden</h3>';
-                    echo '<p>Erstellen Sie Bewertungsvorlagen mit verschiedenen Kriterien und Gewichtungen.</p>';
+                    echo '<h3 style="margin: 20px 0;">Vorlagen-System in Entwicklung</h3>';
+                    echo '<p>Erstellen Sie wiederverwendbare Bewertungsvorlagen für verschiedene Projekttypen.</p>';
                     echo '</div>';
                     echo '</div>';
                     break;
-                    
+
                 case 'uebersicht':
                     echo '<h2>📊 Übersicht</h2>';
-                    echo '<p style="margin-bottom: 30px; color: #b0b0b0;">Verschaffen Sie sich einen Überblick über alle Bewertungen und Auswertungen.</p>';
-                    
-                    echo '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin-bottom: 30px;">';
-                    echo '<div style="background: #3d3d3d; padding: 20px; border-radius: 12px; text-align: center;">';
-                    echo '<div style="font-size: 32px; font-weight: bold; color: #5b67ca; margin-bottom: 8px;">0</div>';
-                    echo '<div style="color: #b0b0b0; font-size: 14px;">Bewertungen gesamt</div>';
-                    echo '</div>';
-                    echo '<div style="background: #3d3d3d; padding: 20px; border-radius: 12px; text-align: center;">';
-                    echo '<div style="font-size: 32px; font-weight: bold; color: #27ae60; margin-bottom: 8px;">0</div>';
-                    echo '<div style="color: #b0b0b0; font-size: 14px;">Aktive Themen</div>';
-                    echo '</div>';
-                    echo '<div style="background: #3d3d3d; padding: 20px; border-radius: 12px; text-align: center;">';
-                    echo '<div style="font-size: 32px; font-weight: bold; color: #e67e22; margin-bottom: 8px;">0</div>';
-                    echo '<div style="color: #b0b0b0; font-size: 14px;">Gruppen erstellt</div>';
-                    echo '</div>';
-                    echo '<div style="background: #3d3d3d; padding: 20px; border-radius: 12px; text-align: center;">';
-                    echo '<div style="font-size: 32px; font-weight: bold; color: #8e44ad; margin-bottom: 8px;">0</div>';
-                    echo '<div style="color: #b0b0b0; font-size: 14px;">Schüler bewertet</div>';
-                    echo '</div>';
-                    echo '</div>';
+                    echo '<p style="margin-bottom: 30px; color: #b0b0b0;">Statistische Auswertungen und Berichte zu Ihren Bewertungen.</p>';
                     
                     echo '<div style="background: #3d3d3d; padding: 30px; border-radius: 12px;">';
-                    echo '<h3 style="color: #5b67ca; margin-bottom: 20px;">Letzte Aktivitäten</h3>';
                     echo '<div style="text-align: center; padding: 40px; color: #888;">';
                     echo '<span style="font-size: 48px;">📊</span>';
-                    echo '<h3 style="margin: 20px 0;">Noch keine Aktivitäten</h3>';
-                    echo '<p>Hier werden Ihre letzten Bewertungen und Aktivitäten angezeigt.</p>';
+                    echo '<h3 style="margin: 20px 0;">Statistiken werden erstellt</h3>';
+                    echo '<p>Nach den ersten Bewertungen werden hier detaillierte Auswertungen angezeigt.</p>';
                     echo '</div>';
                     echo '</div>';
                     break;
-                    
+
                 case 'einstellungen':
                     echo '<h2>⚙️ Einstellungen</h2>';
-                    echo '<p style="margin-bottom: 30px; color: #b0b0b0;">Verwalten Sie Ihre persönlichen Einstellungen und Präferenzen.</p>';
-                    
-                    echo '<div style="background: #3d3d3d; padding: 30px; border-radius: 12px; margin-bottom: 20px;">';
-                    echo '<h3 style="color: #5b67ca; margin-bottom: 20px;">Persönliche Daten</h3>';
-                    echo '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">';
-                    echo '<div>';
-                    echo '<label style="display: block; margin-bottom: 8px; color: #e0e0e0;">Name</label>';
-                    echo '<input type="text" value="' . htmlspecialchars($teacher['name']) . '" style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #555; background: #2d2d2d; color: #e0e0e0;" readonly>';
-                    echo '</div>';
-                    echo '<div>';
-                    echo '<label style="display: block; margin-bottom: 8px; color: #e0e0e0;">E-Mail</label>';
-                    echo '<input type="email" value="' . htmlspecialchars($teacher['email']) . '" style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #555; background: #2d2d2d; color: #e0e0e0;" readonly>';
-                    echo '</div>';
-                    echo '</div>';
-                    echo '</div>';
-                    
-                    echo '<div style="background: #3d3d3d; padding: 30px; border-radius: 12px; margin-bottom: 20px;">';
-                    echo '<h3 style="color: #5b67ca; margin-bottom: 20px;">Passwort ändern</h3>';
-                    echo '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px;">';
-                    echo '<div>';
-                    echo '<label style="display: block; margin-bottom: 8px; color: #e0e0e0;">Neues Passwort</label>';
-                    echo '<input type="password" style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #555; background: #2d2d2d; color: #e0e0e0;">';
-                    echo '</div>';
-                    echo '<div>';
-                    echo '<label style="display: block; margin-bottom: 8px; color: #e0e0e0;">Passwort bestätigen</label>';
-                    echo '<input type="password" style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #555; background: #2d2d2d; color: #e0e0e0;">';
-                    echo '</div>';
-                    echo '</div>';
-                    echo '<button style="background: #5b67ca; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer;">Passwort ändern</button>';
-                    echo '</div>';
+                    echo '<p style="margin-bottom: 30px; color: #b0b0b0;">Persönliche Einstellungen und Präferenzen anpassen.</p>';
                     
                     echo '<div style="background: #3d3d3d; padding: 30px; border-radius: 12px;">';
-                    echo '<h3 style="color: #5b67ca; margin-bottom: 20px;">Systemeinstellungen</h3>';
-                    echo '<div style="margin-bottom: 15px;">';
-                    echo '<label style="display: flex; align-items: center; color: #e0e0e0; cursor: pointer;">';
-                    echo '<input type="checkbox" style="margin-right: 10px;"> E-Mail-Benachrichtigungen aktivieren';
-                    echo '</label>';
+                    echo '<div style="text-align: center; padding: 40px; color: #888;">';
+                    echo '<span style="font-size: 48px;">⚙️</span>';
+                    echo '<h3 style="margin: 20px 0;">Einstellungen in Vorbereitung</h3>';
+                    echo '<p>Hier können Sie bald Ihre persönlichen Präferenzen anpassen.</p>';
                     echo '</div>';
-                    echo '<div style="margin-bottom: 15px;">';
-                    echo '<label style="display: flex; align-items: center; color: #e0e0e0; cursor: pointer;">';
-                    echo '<input type="checkbox" checked style="margin-right: 10px;"> Automatische Speicherung';
-                    echo '</label>';
-                    echo '</div>';
-                    echo '<div style="margin-bottom: 20px;">';
-                    echo '<label style="display: flex; align-items: center; color: #e0e0e0; cursor: pointer;">';
-                    echo '<input type="checkbox" style="margin-right: 10px;"> Erweiterte Bewertungsoptionen anzeigen';
-                    echo '</label>';
-                    echo '</div>';
-                    echo '<button style="background: #27ae60; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer;">Einstellungen speichern</button>';
                     echo '</div>';
                     break;
-                    
+
                 default:
                     echo '<h2>Seite nicht gefunden</h2>';
                     echo '<p>Die angeforderte Seite existiert nicht.</p>';
+                    break;
             }
             ?>
         </div>

@@ -1,61 +1,16 @@
 <?php
-require_once '../config.php';
+session_start();
+require_once '../php/db.php';
 
-// Lehrer-Zugriff prüfen
-if (!isLoggedIn() || $_SESSION['user_type'] !== 'lehrer') {
-    header('Location: ../index.php');
+// Sicherheitsprüfung
+if (!isset($_SESSION['user_id']) || $_SESSION['user_type'] !== 'lehrer') {
+    header('Location: ../login.php');
     exit();
 }
 
 $db = getDB();
 $teacher_id = $_SESSION['user_id'];
 $school_id = $_SESSION['school_id'];
-
-// Prüfen ob Themen-Tabellen existieren
-try {
-    $db->query("SELECT 1 FROM topics LIMIT 1");
-    $db->query("SELECT 1 FROM topic_subjects LIMIT 1");
-} catch (Exception $e) {
-    die('
-    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; background: #1e293b; color: white; border-radius: 10px;">
-        <h2 style="color: #ef4444;">⚠️ Datenbankfehler</h2>
-        <p>Die Themen-Tabellen sind noch nicht erstellt.</p>
-        <p>Bitte führen Sie zuerst die SQL-Befehle für die Datenbank-Erweiterung aus:</p>
-        <pre style="background: #0f172a; padding: 15px; border-radius: 5px; overflow: auto; font-size: 12px;">
-CREATE TABLE `topics` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `school_id` int(11) NOT NULL,
-  `teacher_id` int(11) NOT NULL,
-  `title` varchar(255) NOT NULL,
-  `description` text DEFAULT NULL,
-  `is_active` tinyint(1) DEFAULT 1,
-  `created_at` timestamp NULL DEFAULT current_timestamp(),
-  `updated_at` timestamp NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
-  PRIMARY KEY (`id`),
-  KEY `idx_school_id` (`school_id`),
-  KEY `idx_teacher_id` (`teacher_id`),
-  KEY `idx_active` (`is_active`),
-  FOREIGN KEY (`school_id`) REFERENCES `schools` (`id`) ON DELETE CASCADE,
-  FOREIGN KEY (`teacher_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
-
-CREATE TABLE `topic_subjects` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `topic_id` int(11) NOT NULL,
-  `subject_id` int(11) NOT NULL,
-  `created_at` timestamp NULL DEFAULT current_timestamp(),
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `unique_topic_subject` (`topic_id`, `subject_id`),
-  KEY `idx_topic_id` (`topic_id`),
-  KEY `idx_subject_id` (`subject_id`),
-  FOREIGN KEY (`topic_id`) REFERENCES `topics` (`id`) ON DELETE CASCADE,
-  FOREIGN KEY (`subject_id`) REFERENCES `subjects` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
-        </pre>
-        <p><a href="dashboard.php" style="color: #3b82f6;">← Zurück zum Dashboard</a></p>
-    </div>
-    ');
-}
 
 // AJAX Requests verarbeiten
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
@@ -171,6 +126,7 @@ $stmt->execute([$school_id]);
 $subjects = $stmt->fetchAll();
 
 // Themen abrufen mit Fächern
+$filter = $_GET['filter'] ?? 'alphabetic';
 $sort_by = $_GET['sort'] ?? 'title';
 
 $order_clause = "ORDER BY t.title ASC";
@@ -221,222 +177,197 @@ foreach ($topics as &$topic) {
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
-            background-color: #1a1a1a;
-            color: #e0e0e0;
-            line-height: 1.6;
-        }
-
-        .header {
-            background: linear-gradient(135deg, #5b67ca 0%, #7b85ff 100%);
-            padding: 20px 40px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
-        }
-
-        .header-content {
-            max-width: 1400px;
-            margin: 0 auto;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        .header h1 {
-            color: white;
-            font-size: 28px;
-            font-weight: 600;
-        }
-
-        .header-info {
-            display: flex;
-            align-items: center;
-            gap: 30px;
-            color: white;
-        }
-
-        .back-btn {
-            background: rgba(255,255,255,0.2);
-            color: white;
-            padding: 8px 16px;
-            border: none;
-            border-radius: 6px;
-            text-decoration: none;
-            font-size: 14px;
-            transition: background-color 0.2s;
-        }
-
-        .back-btn:hover {
-            background: rgba(255,255,255,0.3);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #0f172a, #1e293b);
+            color: #e2e8f0;
+            min-height: 100vh;
         }
 
         .container {
             max-width: 1400px;
             margin: 0 auto;
-            padding: 40px;
+            padding: 2rem;
+        }
+
+        .header {
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            border-radius: 1rem;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            backdrop-filter: blur(10px);
+        }
+
+        .header h1 {
+            color: #3b82f6;
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .header p {
+            opacity: 0.8;
+            font-size: 1.1rem;
         }
 
         .controls {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 30px;
-            gap: 20px;
+            margin-bottom: 2rem;
+            gap: 1rem;
             flex-wrap: wrap;
         }
 
         .filter-controls {
             display: flex;
-            gap: 15px;
+            gap: 1rem;
             align-items: center;
         }
 
         .toggle-group {
             display: flex;
-            background: #2d2d2d;
-            border-radius: 6px;
-            padding: 4px;
-            border: 1px solid #444;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 0.5rem;
+            padding: 0.25rem;
+            border: 1px solid rgba(59, 130, 246, 0.2);
         }
 
         .toggle-btn {
-            padding: 8px 16px;
+            padding: 0.5rem 1rem;
             background: transparent;
             border: none;
-            color: #e0e0e0;
+            color: #cbd5e1;
             cursor: pointer;
-            border-radius: 4px;
-            transition: all 0.2s;
-            font-size: 14px;
+            border-radius: 0.25rem;
+            transition: all 0.3s ease;
+            font-size: 0.9rem;
         }
 
         .toggle-btn.active {
-            background: #5b67ca;
+            background: linear-gradient(135deg, #3b82f6, #1d4ed8);
             color: white;
         }
 
         .toggle-btn:hover:not(.active) {
-            background: #3d3d3d;
-        }
-
-        .toggle-btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
+            background: rgba(59, 130, 246, 0.1);
         }
 
         .select-control {
-            padding: 8px 12px;
-            background: #2d2d2d;
-            border: 1px solid #444;
-            border-radius: 6px;
+            padding: 0.5rem 1rem;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            border-radius: 0.5rem;
             color: white;
             cursor: pointer;
         }
 
         .btn {
-            padding: 10px 20px;
+            padding: 0.75rem 1.5rem;
             border: none;
-            border-radius: 6px;
+            border-radius: 0.5rem;
             cursor: pointer;
-            font-size: 14px;
+            font-size: 0.9rem;
             font-weight: 500;
             text-decoration: none;
             display: inline-flex;
             align-items: center;
-            gap: 8px;
-            transition: all 0.2s;
+            gap: 0.5rem;
+            transition: all 0.3s ease;
         }
 
         .btn-primary {
-            background: #5b67ca;
+            background: linear-gradient(135deg, #3b82f6, #1d4ed8);
             color: white;
         }
 
         .btn-primary:hover {
-            background: #4a56b8;
+            background: linear-gradient(135deg, #1d4ed8, #1e40af);
             transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
         }
 
         .btn-secondary {
-            background: #555;
-            color: #e0e0e0;
-            border: 1px solid #666;
+            background: rgba(100, 116, 139, 0.2);
+            color: #cbd5e1;
+            border: 1px solid rgba(100, 116, 139, 0.3);
         }
 
         .btn-secondary:hover {
-            background: #666;
+            background: rgba(100, 116, 139, 0.3);
         }
 
         .btn-danger {
-            background: #e74c3c;
+            background: linear-gradient(135deg, #ef4444, #dc2626);
             color: white;
         }
 
         .btn-danger:hover {
-            background: #c0392b;
+            background: linear-gradient(135deg, #dc2626, #b91c1c);
         }
 
         .btn-sm {
-            padding: 6px 12px;
-            font-size: 12px;
+            padding: 0.5rem 1rem;
+            font-size: 0.8rem;
         }
 
         .topics-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
-            gap: 20px;
-            margin-top: 30px;
+            gap: 1.5rem;
+            margin-top: 2rem;
         }
 
         .topic-card {
-            background: #2d2d2d;
-            border: 1px solid #444;
-            border-radius: 12px;
-            padding: 25px;
-            transition: all 0.2s;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            border-radius: 1rem;
+            padding: 1.5rem;
+            backdrop-filter: blur(10px);
+            transition: all 0.3s ease;
         }
 
         .topic-card:hover {
             transform: translateY(-2px);
-            box-shadow: 0 8px 25px rgba(91, 103, 202, 0.2);
-            border-color: #5b67ca;
+            box-shadow: 0 8px 25px rgba(59, 130, 246, 0.15);
+            border-color: rgba(59, 130, 246, 0.4);
         }
 
         .topic-header {
             display: flex;
             justify-content: space-between;
             align-items: flex-start;
-            margin-bottom: 15px;
+            margin-bottom: 1rem;
         }
 
         .topic-title {
-            font-size: 18px;
+            font-size: 1.2rem;
             font-weight: 600;
-            color: #5b67ca;
-            margin-bottom: 8px;
+            color: #3b82f6;
+            margin-bottom: 0.5rem;
         }
 
         .topic-meta {
-            font-size: 12px;
-            color: #888;
+            font-size: 0.8rem;
+            color: #94a3b8;
         }
 
         .topic-description {
-            color: #b0b0b0;
+            color: #cbd5e1;
             line-height: 1.6;
-            margin-bottom: 15px;
+            margin-bottom: 1rem;
         }
 
         .topic-subjects {
             display: flex;
             flex-wrap: wrap;
-            gap: 8px;
-            margin-bottom: 15px;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
         }
 
         .subject-tag {
-            padding: 4px 12px;
-            border-radius: 15px;
-            font-size: 12px;
+            padding: 0.25rem 0.75rem;
+            border-radius: 1rem;
+            font-size: 0.8rem;
             font-weight: 500;
             color: white;
             text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
@@ -444,7 +375,7 @@ foreach ($topics as &$topic) {
 
         .topic-actions {
             display: flex;
-            gap: 8px;
+            gap: 0.5rem;
             justify-content: flex-end;
         }
 
@@ -456,6 +387,7 @@ foreach ($topics as &$topic) {
             width: 100%;
             height: 100%;
             background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(5px);
             z-index: 1000;
         }
 
@@ -466,10 +398,10 @@ foreach ($topics as &$topic) {
         }
 
         .modal-content {
-            background: #2d2d2d;
-            border: 1px solid #444;
-            border-radius: 12px;
-            padding: 30px;
+            background: linear-gradient(135deg, #1e293b, #334155);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            border-radius: 1rem;
+            padding: 2rem;
             max-width: 600px;
             width: 90%;
             max-height: 90vh;
@@ -480,52 +412,52 @@ foreach ($topics as &$topic) {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 25px;
+            margin-bottom: 1.5rem;
         }
 
         .modal-title {
-            font-size: 20px;
-            color: #5b67ca;
+            font-size: 1.5rem;
+            color: #3b82f6;
         }
 
         .close-modal {
             background: none;
             border: none;
-            color: #888;
-            font-size: 24px;
+            color: #94a3b8;
+            font-size: 1.5rem;
             cursor: pointer;
-            padding: 5px;
+            padding: 0.5rem;
         }
 
         .close-modal:hover {
-            color: #e74c3c;
+            color: #ef4444;
         }
 
         .form-group {
-            margin-bottom: 20px;
+            margin-bottom: 1.5rem;
         }
 
         .form-label {
             display: block;
-            margin-bottom: 8px;
+            margin-bottom: 0.5rem;
             font-weight: 500;
-            color: #e0e0e0;
+            color: #e2e8f0;
         }
 
         .form-control {
             width: 100%;
-            padding: 12px;
-            background: #1a1a1a;
-            border: 1px solid #444;
-            border-radius: 6px;
+            padding: 0.75rem;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(100, 116, 139, 0.3);
+            border-radius: 0.5rem;
             color: white;
-            font-size: 14px;
+            font-size: 1rem;
         }
 
         .form-control:focus {
             outline: none;
-            border-color: #5b67ca;
-            box-shadow: 0 0 0 3px rgba(91, 103, 202, 0.1);
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
         }
 
         textarea.form-control {
@@ -536,74 +468,79 @@ foreach ($topics as &$topic) {
         .subjects-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-            gap: 10px;
+            gap: 0.5rem;
         }
 
         .subject-checkbox {
             display: flex;
             align-items: center;
-            padding: 10px;
-            background: #1a1a1a;
-            border: 1px solid #444;
-            border-radius: 6px;
+            padding: 0.5rem;
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid rgba(100, 116, 139, 0.2);
+            border-radius: 0.5rem;
             cursor: pointer;
-            transition: all 0.2s;
+            transition: all 0.3s ease;
         }
 
         .subject-checkbox:hover {
-            background: #222;
+            background: rgba(0, 0, 0, 0.4);
         }
 
         .subject-checkbox input {
-            margin-right: 8px;
+            margin-right: 0.5rem;
         }
 
         .subject-checkbox.checked {
-            border-color: #5b67ca;
-            background: rgba(91, 103, 202, 0.1);
+            border-color: #3b82f6;
+            background: rgba(59, 130, 246, 0.1);
         }
 
         .modal-actions {
             display: flex;
-            gap: 15px;
+            gap: 1rem;
             justify-content: flex-end;
-            margin-top: 25px;
+            margin-top: 2rem;
         }
 
         .empty-state {
             text-align: center;
-            padding: 60px 40px;
-            color: #888;
+            padding: 4rem 2rem;
+            color: #94a3b8;
         }
 
         .empty-state-icon {
-            font-size: 64px;
-            margin-bottom: 20px;
+            font-size: 4rem;
+            margin-bottom: 1rem;
             opacity: 0.5;
         }
 
+        .loading {
+            opacity: 0.6;
+            pointer-events: none;
+        }
+
         .flash-message {
-            padding: 12px 20px;
-            border-radius: 6px;
-            margin-bottom: 20px;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            margin-bottom: 1rem;
             font-weight: 500;
         }
 
         .flash-success {
-            background: rgba(39, 174, 96, 0.1);
-            border: 1px solid rgba(39, 174, 96, 0.3);
-            color: #2ecc71;
+            background: rgba(34, 197, 94, 0.1);
+            border: 1px solid rgba(34, 197, 94, 0.3);
+            color: #86efac;
         }
 
         .flash-error {
-            background: rgba(231, 76, 60, 0.1);
-            border: 1px solid rgba(231, 76, 60, 0.3);
-            color: #e74c3c;
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            color: #fca5a5;
         }
 
         @media (max-width: 768px) {
             .container {
-                padding: 20px;
+                padding: 1rem;
             }
 
             .controls {
@@ -620,24 +557,20 @@ foreach ($topics as &$topic) {
             }
 
             .modal-content {
-                padding: 20px;
-                margin: 20px;
-                width: calc(100% - 40px);
+                padding: 1.5rem;
+                margin: 1rem;
+                width: calc(100% - 2rem);
             }
         }
     </style>
 </head>
 <body>
-    <div class="header">
-        <div class="header-content">
-            <h1>📚 Themen verwalten</h1>
-            <div class="header-info">
-                <a href="dashboard.php" class="back-btn">← Zurück zum Dashboard</a>
-            </div>
-        </div>
-    </div>
-
     <div class="container">
+        <div class="header">
+            <h1>📚 Themen verwalten</h1>
+            <p>Erstellen und verwalten Sie Projektthemen für Ihre Schüler</p>
+        </div>
+
         <div id="flash-messages"></div>
 
         <div class="controls">
@@ -648,9 +581,10 @@ foreach ($topics as &$topic) {
                 </div>
 
                 <select class="select-control" id="sortSelect">
-                    <option value="alphabetic" <?= isset($_GET['sort']) && $_GET['sort'] === 'alphabetic' ? 'selected' : '' ?>>Alphabetisch</option>
-                    <option value="date" <?= isset($_GET['sort']) && $_GET['sort'] === 'date' ? 'selected' : '' ?>>Nach Erstelldatum</option>
-                    <option value="updated" <?= isset($_GET['sort']) && $_GET['sort'] === 'updated' ? 'selected' : '' ?>>Zuletzt geändert</option>
+                    <option value="alphabetic">Alphabetisch</option>
+                    <option value="date">Nach Erstelldatum</option>
+                    <option value="updated">Zuletzt geändert</option>
+                    <option value="subject">Nach Fach</option>
                 </select>
             </div>
 
@@ -665,7 +599,7 @@ foreach ($topics as &$topic) {
                     <div class="empty-state-icon">📚</div>
                     <h3>Noch keine Themen vorhanden</h3>
                     <p>Erstellen Sie Ihr erstes Projektthema für die Schüler.</p>
-                    <button class="btn btn-primary" onclick="openCreateModal()" style="margin-top: 20px;">
+                    <button class="btn btn-primary" onclick="openCreateModal()" style="margin-top: 1rem;">
                         ➕ Erstes Thema erstellen
                     </button>
                 </div>
@@ -696,7 +630,7 @@ foreach ($topics as &$topic) {
                         </div>
 
                         <div class="topic-actions">
-                            <button class="btn btn-secondary btn-sm" onclick="editTopic(<?= $topic['id'] ?>, '<?= htmlspecialchars(addslashes($topic['title'])) ?>', '<?= htmlspecialchars(addslashes($topic['description'])) ?>', <?= json_encode($topic['subjects']) ?>)">
+                            <button class="btn btn-secondary btn-sm" onclick="editTopic(<?= $topic['id'] ?>)">
                                 ✏️ Bearbeiten
                             </button>
                             <button class="btn btn-danger btn-sm" onclick="deleteTopic(<?= $topic['id'] ?>)">
@@ -754,7 +688,9 @@ foreach ($topics as &$topic) {
 
     <script>
         let isEditing = false;
+        let currentTopicId = null;
 
+        // Modal Funktionen
         function openCreateModal() {
             document.getElementById('modalTitle').textContent = 'Neues Thema';
             document.getElementById('topicForm').reset();
@@ -762,6 +698,7 @@ foreach ($topics as &$topic) {
             document.getElementById('submitBtn').textContent = 'Erstellen';
             isEditing = false;
             
+            // Alle Checkboxen zurücksetzen
             document.querySelectorAll('.subject-checkbox').forEach(label => {
                 label.classList.remove('checked');
                 label.querySelector('input').checked = false;
@@ -774,30 +711,47 @@ foreach ($topics as &$topic) {
             document.getElementById('topicModal').classList.remove('show');
         }
 
-        function editTopic(topicId, title, description, subjects) {
-            document.getElementById('modalTitle').textContent = 'Thema bearbeiten';
-            document.getElementById('topicId').value = topicId;
-            document.getElementById('topicTitle').value = title;
-            document.getElementById('topicDescription').value = description;
-            document.getElementById('submitBtn').textContent = 'Aktualisieren';
-            isEditing = true;
-            
-            document.querySelectorAll('.subject-checkbox').forEach(label => {
-                label.classList.remove('checked');
-                label.querySelector('input').checked = false;
-            });
-            
-            subjects.forEach(subject => {
-                const checkbox = document.querySelector(`input[value="${subject.id}"]`);
-                if (checkbox) {
-                    checkbox.checked = true;
-                    checkbox.closest('.subject-checkbox').classList.add('checked');
-                }
-            });
-            
-            document.getElementById('topicModal').classList.add('show');
+        // Thema bearbeiten
+        async function editTopic(topicId) {
+            try {
+                // Topic-Daten vom Server laden (vereinfacht - in der Praxis über AJAX)
+                const topicCard = document.querySelector(`[data-topic-id="${topicId}"]`);
+                const title = topicCard.querySelector('.topic-title').textContent;
+                const description = topicCard.querySelector('.topic-description')?.textContent || '';
+                
+                document.getElementById('modalTitle').textContent = 'Thema bearbeiten';
+                document.getElementById('topicId').value = topicId;
+                document.getElementById('topicTitle').value = title;
+                document.getElementById('topicDescription').value = description;
+                document.getElementById('submitBtn').textContent = 'Aktualisieren';
+                isEditing = true;
+                currentTopicId = topicId;
+                
+                // Fächer auswählen (vereinfacht)
+                const subjectTags = topicCard.querySelectorAll('.subject-tag');
+                document.querySelectorAll('.subject-checkbox').forEach(label => {
+                    label.classList.remove('checked');
+                    label.querySelector('input').checked = false;
+                });
+                
+                subjectTags.forEach(tag => {
+                    const subjectName = tag.textContent.trim();
+                    document.querySelectorAll('.subject-checkbox').forEach(label => {
+                        const labelText = label.querySelector('span').textContent.trim();
+                        if (labelText === subjectName) {
+                            label.classList.add('checked');
+                            label.querySelector('input').checked = true;
+                        }
+                    });
+                });
+                
+                document.getElementById('topicModal').classList.add('show');
+            } catch (error) {
+                showFlashMessage('Fehler beim Laden der Daten: ' + error.message, 'error');
+            }
         }
 
+        // Thema löschen
         async function deleteTopic(topicId) {
             if (!confirm('Sind Sie sicher, dass Sie dieses Thema löschen möchten?')) {
                 return;
@@ -816,8 +770,10 @@ foreach ($topics as &$topic) {
                 
                 if (result.success) {
                     showFlashMessage(result.message, 'success');
+                    // Karte entfernen
                     document.querySelector(`[data-topic-id="${topicId}"]`).remove();
                     
+                    // Prüfen ob Grid leer ist
                     if (document.querySelectorAll('.topic-card').length === 0) {
                         location.reload();
                     }
@@ -829,6 +785,7 @@ foreach ($topics as &$topic) {
             }
         }
 
+        // Form Submit
         document.getElementById('topicForm').addEventListener('submit', async function(e) {
             e.preventDefault();
             
@@ -849,6 +806,7 @@ foreach ($topics as &$topic) {
                 formData.append('title', document.getElementById('topicTitle').value);
                 formData.append('description', document.getElementById('topicDescription').value);
                 
+                // Ausgewählte Fächer sammeln
                 const selectedSubjects = [];
                 document.querySelectorAll('.subject-checkbox input:checked').forEach(input => {
                     selectedSubjects.push(input.value);
@@ -865,6 +823,7 @@ foreach ($topics as &$topic) {
                 if (result.success) {
                     showFlashMessage(result.message, 'success');
                     closeModal();
+                    // Seite neu laden um Änderungen anzuzeigen
                     setTimeout(() => location.reload(), 1000);
                 } else {
                     showFlashMessage(result.message, 'error');
@@ -877,6 +836,7 @@ foreach ($topics as &$topic) {
             }
         });
 
+        // Checkbox Handling
         document.querySelectorAll('.subject-checkbox').forEach(label => {
             label.addEventListener('click', function() {
                 const checkbox = this.querySelector('input');
@@ -885,6 +845,7 @@ foreach ($topics as &$topic) {
             });
         });
 
+        // Sort Handler
         document.getElementById('sortSelect').addEventListener('change', function() {
             const sortBy = this.value;
             const url = new URL(window.location);
@@ -892,6 +853,7 @@ foreach ($topics as &$topic) {
             window.location.href = url.toString();
         });
 
+        // Flash Messages
         function showFlashMessage(message, type) {
             const flashContainer = document.getElementById('flash-messages');
             const flash = document.createElement('div');
@@ -905,12 +867,14 @@ foreach ($topics as &$topic) {
             }, 5000);
         }
 
+        // Modal schließen bei Klick außerhalb
         document.getElementById('topicModal').addEventListener('click', function(e) {
             if (e.target === this) {
                 closeModal();
             }
         });
 
+        // ESC Taste
         document.addEventListener('keydown', function(e) {
             if (e.key === 'Escape' && document.getElementById('topicModal').classList.contains('show')) {
                 closeModal();
