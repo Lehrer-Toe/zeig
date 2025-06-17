@@ -15,6 +15,193 @@ if (isset($_SESSION['school_id'])) {
     requireValidSchoolLicense($_SESSION['school_id']);
 }
 
+// CSRF-Token generieren falls nicht vorhanden
+if (!isset($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
+// AJAX Requests verarbeiten (für Themen-Modul)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    header('Content-Type: application/json; charset=utf-8');
+    $response = ['success' => false, 'message' => ''];
+    
+    try {
+        $db = getDB();
+        $school_id = $_SESSION['school_id'];
+        
+        // CSRF-Token prüfen
+        if (!isset($_POST['csrf_token']) || !isset($_SESSION['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
+            throw new Exception('Ungültiger CSRF-Token');
+        }
+        
+        switch ($_POST['action']) {
+            case 'create_topic':
+                // Sicherstellen, dass keine topic_id für create_topic gesendet wird
+                $topic_id_check = (int)($_POST['topic_id'] ?? 0);
+                if ($topic_id_check > 0) {
+                    throw new Exception('Fehler: Topic-ID darf bei Erstellung nicht gesetzt sein.');
+                }
+                
+                $title = trim($_POST['title'] ?? '');
+                $short_description = trim($_POST['short_description'] ?? '');
+                $is_global = (int)($_POST['is_global'] ?? 0);
+                $subject_ids = json_decode($_POST['subject_ids'] ?? '[]', true);
+                
+                if (empty($title)) {
+                    throw new Exception('Titel ist erforderlich.');
+                }
+                
+                if (mb_strlen($short_description) > 240) {
+                    throw new Exception('Kurzbeschreibung darf maximal 240 Zeichen haben.');
+                }
+                
+                if (empty($subject_ids) || !is_array($subject_ids)) {
+                    throw new Exception('Mindestens ein Fach muss ausgewählt werden.');
+                }
+                
+                $db->beginTransaction();
+                
+                // Thema erstellen (description als leerer String)
+                $stmt = $db->prepare("INSERT INTO topics (school_id, teacher_id, title, description, short_description, is_global, created_at, updated_at) VALUES (?, ?, ?, '', ?, ?, NOW(), NOW())");
+                $stmt->execute([$school_id, $teacher_id, $title, $short_description, $is_global]);
+                $new_topic_id = $db->lastInsertId();
+                
+                // Fächer zuordnen
+                $stmt = $db->prepare("INSERT INTO topic_subjects (topic_id, subject_id) VALUES (?, ?)");
+                foreach ($subject_ids as $subject_id) {
+                    $stmt->execute([$new_topic_id, (int)$subject_id]);
+                }
+                
+                $db->commit();
+                $response['success'] = true;
+                $response['message'] = 'Thema erfolgreich erstellt.';
+                $response['topic_id'] = $new_topic_id; // Neue ID zurückgeben für Debug
+                break;
+                
+            case 'update_topic':
+                $topic_id = (int)($_POST['topic_id'] ?? 0);
+                $title = trim($_POST['title'] ?? '');
+                $short_description = trim($_POST['short_description'] ?? '');
+                $is_global = (int)($_POST['is_global'] ?? 0);
+                $subject_ids = json_decode($_POST['subject_ids'] ?? '[]', true);
+                
+                if ($topic_id <= 0) {
+                    throw new Exception('Thema-ID ist für Update erforderlich und muss größer als 0 sein.');
+                }
+                
+                if (empty($title)) {
+                    throw new Exception('Titel ist erforderlich.');
+                }
+                
+                if (mb_strlen($short_description) > 240) {
+                    throw new Exception('Kurzbeschreibung darf maximal 240 Zeichen haben.');
+                }
+                
+                if (empty($subject_ids) || !is_array($subject_ids)) {
+                    throw new Exception('Mindestens ein Fach muss ausgewählt werden.');
+                }
+                
+                // Prüfen ob Thema dem Lehrer gehört
+                $stmt = $db->prepare("SELECT id, title FROM topics WHERE id = ? AND teacher_id = ? AND school_id = ? AND is_active = 1");
+                $stmt->execute([$topic_id, $teacher_id, $school_id]);
+                $existing_topic = $stmt->fetch();
+                if (!$existing_topic) {
+                    throw new Exception('Thema nicht gefunden oder keine Berechtigung.');
+                }
+                
+                $db->beginTransaction();
+                
+                // Thema aktualisieren (description nicht ändern)
+                $stmt = $db->prepare("UPDATE topics SET title = ?, short_description = ?, is_global = ?, updated_at = NOW() WHERE id = ? AND teacher_id = ? AND school_id = ?");
+                $affected = $stmt->execute([$title, $short_description, $is_global, $topic_id, $teacher_id, $school_id]);
+                
+                if ($stmt->rowCount() === 0) {
+                    throw new Exception('Thema konnte nicht aktualisiert werden.');
+                }
+                
+                // Alte Fachzuordnungen löschen
+                $stmt = $db->prepare("DELETE FROM topic_subjects WHERE topic_id = ?");
+                $stmt->execute([$topic_id]);
+                
+                // Neue Fächer zuordnen
+                $stmt = $db->prepare("INSERT INTO topic_subjects (topic_id, subject_id) VALUES (?, ?)");
+                foreach ($subject_ids as $subject_id) {
+                    $stmt->execute([$topic_id, (int)$subject_id]);
+                }
+                
+                $db->commit();
+                $response['success'] = true;
+                $response['message'] = 'Thema "' . $existing_topic['title'] . '" erfolgreich aktualisiert.';
+                break;
+                
+            case 'delete_topic':
+                $topic_id = (int)($_POST['topic_id'] ?? 0);
+                
+                if ($topic_id <= 0) {
+                    throw new Exception('Thema-ID ist für Löschvorgang erforderlich und muss größer als 0 sein.');
+                }
+                
+                // Prüfen ob Thema dem Lehrer gehört
+                $stmt = $db->prepare("SELECT title FROM topics WHERE id = ? AND teacher_id = ? AND school_id = ? AND is_active = 1");
+                $stmt->execute([$topic_id, $teacher_id, $school_id]);
+                $topic = $stmt->fetch();
+                if (!$topic) {
+                    throw new Exception('Thema nicht gefunden oder keine Berechtigung.');
+                }
+                
+                // Soft delete verwenden
+                $stmt = $db->prepare("UPDATE topics SET is_active = 0, updated_at = NOW() WHERE id = ? AND teacher_id = ? AND school_id = ?");
+                $result = $stmt->execute([$topic_id, $teacher_id, $school_id]);
+                
+                if ($stmt->rowCount() === 0) {
+                    throw new Exception('Thema konnte nicht gelöscht werden.');
+                }
+                
+                $response['success'] = true;
+                $response['message'] = "Thema '{$topic['title']}' erfolgreich gelöscht.";
+                break;
+                
+            case 'get_topic':
+                $topic_id = (int)($_POST['topic_id'] ?? 0);
+                
+                if ($topic_id <= 0) {
+                    throw new Exception('Thema-ID ist erforderlich und muss größer als 0 sein.');
+                }
+                
+                $stmt = $db->prepare("
+                    SELECT t.*, GROUP_CONCAT(ts.subject_id) as subject_ids
+                    FROM topics t
+                    LEFT JOIN topic_subjects ts ON t.id = ts.topic_id
+                    WHERE t.id = ? AND t.teacher_id = ? AND t.school_id = ? AND t.is_active = 1
+                    GROUP BY t.id
+                ");
+                $stmt->execute([$topic_id, $teacher_id, $school_id]);
+                $topic = $stmt->fetch();
+                
+                if (!$topic) {
+                    throw new Exception('Thema nicht gefunden oder keine Berechtigung.');
+                }
+                
+                $topic['subject_ids'] = $topic['subject_ids'] ? array_map('intval', explode(',', $topic['subject_ids'])) : [];
+                $response['success'] = true;
+                $response['topic'] = $topic;
+                break;
+                
+            default:
+                throw new Exception('Unbekannte Aktion.');
+        }
+    } catch (Exception $e) {
+        if (isset($db) && $db->inTransaction()) {
+            $db->rollBack();
+        }
+        $response['success'] = false;
+        $response['message'] = $e->getMessage();
+    }
+    
+    echo json_encode($response, JSON_UNESCAPED_UNICODE);
+    exit();
+}
+
 // Lehrerdaten und Schulinfo abrufen
 $db = getDB();
 $stmt = $db->prepare("
