@@ -3,6 +3,12 @@ require_once '../config.php';
 
 // Lehrer-Zugriff prüfen
 if (!isLoggedIn() || $_SESSION['user_type'] !== 'lehrer') {
+    // Bei AJAX-Requests JSON zurückgeben
+    if (isset($_POST['action'])) {
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(['success' => false, 'message' => 'Nicht autorisiert']);
+        exit();
+    }
     header('Location: ../index.php');
     exit();
 }
@@ -27,6 +33,12 @@ try {
         throw new Exception("is_global field missing");
     }
 } catch (Exception $e) {
+    // Bei AJAX-Requests JSON zurückgeben
+    if (isset($_POST['action'])) {
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(['success' => false, 'message' => 'Datenbankfehler: Themen-Tabellen nicht vollständig eingerichtet']);
+        exit();
+    }
     die('
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; background: rgba(255,255,255,0.95); color: #001133; border-radius: 15px; box-shadow: 0 8px 32px rgba(0,0,0,0.2);">
         <h2 style="color: #ef4444;">⚠️ Datenbankfehler</h2>
@@ -77,14 +89,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     header('Content-Type: application/json; charset=utf-8');
     $response = ['success' => false, 'message' => ''];
     
-    // CSRF-Token prüfen
-    if (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
-        $response['message'] = 'Ungültiger CSRF-Token';
-        echo json_encode($response);
-        exit();
-    }
-    
     try {
+        // CSRF-Token prüfen
+        if (!isset($_POST['csrf_token']) || !isset($_SESSION['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
+            throw new Exception('Ungültiger CSRF-Token');
+        }
+        
         switch ($_POST['action']) {
             case 'create_topic':
                 $title = trim($_POST['title'] ?? '');
@@ -219,6 +229,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         if (isset($db) && $db->inTransaction()) {
             $db->rollBack();
         }
+        $response['success'] = false;
         $response['message'] = $e->getMessage();
     }
     
@@ -1106,6 +1117,15 @@ foreach ($topics as &$topic) {
                     body: formData
                 });
 
+                if (!response.ok) {
+                    throw new Error('Server-Fehler: ' + response.status);
+                }
+
+                const contentType = response.headers.get("content-type");
+                if (!contentType || !contentType.includes("application/json")) {
+                    throw new Error("Server hat kein JSON zurückgegeben");
+                }
+
                 const result = await response.json();
                 
                 if (result.success) {
@@ -1133,6 +1153,7 @@ foreach ($topics as &$topic) {
                 }
             } catch (error) {
                 showFlashMessage('Fehler beim Laden der Themendaten: ' + error.message, 'error');
+                console.error('Edit error:', error);
             }
         }
 
@@ -1152,6 +1173,15 @@ foreach ($topics as &$topic) {
                     body: formData
                 });
 
+                if (!response.ok) {
+                    throw new Error('Server-Fehler: ' + response.status);
+                }
+
+                const contentType = response.headers.get("content-type");
+                if (!contentType || !contentType.includes("application/json")) {
+                    throw new Error("Server hat kein JSON zurückgegeben");
+                }
+
                 const result = await response.json();
                 
                 if (result.success) {
@@ -1166,6 +1196,7 @@ foreach ($topics as &$topic) {
                 }
             } catch (error) {
                 showFlashMessage('Fehler beim Löschen: ' + error.message, 'error');
+                console.error('Delete error:', error);
             }
         }
 
@@ -1186,12 +1217,29 @@ foreach ($topics as &$topic) {
                 document.querySelectorAll('.subject-checkbox input:checked').forEach(input => {
                     selectedSubjects.push(input.value);
                 });
+                
+                if (selectedSubjects.length === 0) {
+                    showFlashMessage('Bitte wählen Sie mindestens ein Fach aus.', 'error');
+                    submitBtn.textContent = originalText;
+                    submitBtn.disabled = false;
+                    return;
+                }
+                
                 formData.append('subject_ids', JSON.stringify(selectedSubjects));
 
                 const response = await fetch('', {
                     method: 'POST',
                     body: formData
                 });
+
+                if (!response.ok) {
+                    throw new Error('Server-Fehler: ' + response.status);
+                }
+
+                const contentType = response.headers.get("content-type");
+                if (!contentType || !contentType.includes("application/json")) {
+                    throw new Error("Server hat kein JSON zurückgegeben");
+                }
 
                 const result = await response.json();
                 
@@ -1204,6 +1252,7 @@ foreach ($topics as &$topic) {
                 }
             } catch (error) {
                 showFlashMessage('Fehler beim Speichern: ' + error.message, 'error');
+                console.error('Save error:', error);
             } finally {
                 submitBtn.textContent = originalText;
                 submitBtn.disabled = false;
@@ -1211,10 +1260,19 @@ foreach ($topics as &$topic) {
         });
 
         document.querySelectorAll('.subject-checkbox').forEach(label => {
-            label.addEventListener('click', function() {
-                const checkbox = this.querySelector('input');
-                checkbox.checked = !checkbox.checked;
-                this.classList.toggle('checked', checkbox.checked);
+            label.addEventListener('click', function(e) {
+                if (e.target.tagName !== 'INPUT') {
+                    const checkbox = this.querySelector('input');
+                    checkbox.checked = !checkbox.checked;
+                }
+                this.classList.toggle('checked', this.querySelector('input').checked);
+            });
+            
+            // Für direkte Checkbox-Klicks
+            const checkbox = label.querySelector('input');
+            checkbox.addEventListener('change', function(e) {
+                e.stopPropagation();
+                label.classList.toggle('checked', this.checked);
             });
         });
 
