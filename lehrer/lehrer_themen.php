@@ -1112,7 +1112,7 @@ foreach ($topics as &$topic) {
                 formData.append('topic_id', topicId);
                 formData.append('csrf_token', '<?= $_SESSION['csrf_token'] ?>');
 
-                const response = await fetch('', {
+                const response = await fetch('lehrer_themen.php', {
                     method: 'POST',
                     body: formData
                 });
@@ -1168,7 +1168,7 @@ foreach ($topics as &$topic) {
                 formData.append('topic_id', topicId);
                 formData.append('csrf_token', '<?= $_SESSION['csrf_token'] ?>');
 
-                const response = await fetch('', {
+                const response = await fetch('lehrer_themen.php', {
                     method: 'POST',
                     body: formData
                 });
