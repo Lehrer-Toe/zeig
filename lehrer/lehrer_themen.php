@@ -95,50 +95,37 @@ switch ($sort_by) {
 if ($filter === 'global') {
     // Globale Ansicht: Alle globalen Themen anzeigen (auch eigene)
     $stmt = $db->prepare("
-        SELECT DISTINCT t.id, t.school_id, t.teacher_id, t.title, t.description, 
+        SELECT t.id, t.school_id, t.teacher_id, t.title, t.description, 
                t.short_description, t.is_global, t.is_active, t.created_at, t.updated_at,
                u.name as teacher_name, s.name as school_name
         FROM topics t 
         LEFT JOIN users u ON t.teacher_id = u.id
         LEFT JOIN schools s ON t.school_id = s.id
         WHERE t.is_global = 1 AND t.is_active = 1
-        GROUP BY t.id
         $order_clause
     ");
     $stmt->execute();
 } else {
     // Lokale Ansicht: Nur eigene Themen (unabhängig ob global oder nicht)
     $stmt = $db->prepare("
-        SELECT DISTINCT t.id, t.school_id, t.teacher_id, t.title, t.description, 
+        SELECT t.id, t.school_id, t.teacher_id, t.title, t.description, 
                t.short_description, t.is_global, t.is_active, t.created_at, t.updated_at,
                u.name as teacher_name
         FROM topics t 
         LEFT JOIN users u ON t.teacher_id = u.id
         WHERE t.school_id = ? AND t.teacher_id = ? AND t.is_active = 1
-        GROUP BY t.id
         $order_clause
     ");
     $stmt->execute([$school_id, $teacher_id]);
 }
 $topics = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Duplikate entfernen (falls vorhanden)
-$uniqueTopics = [];
-$seenIds = [];
-foreach ($topics as $topic) {
-    if (!in_array($topic['id'], $seenIds)) {
-        $uniqueTopics[] = $topic;
-        $seenIds[] = $topic['id'];
-    }
-}
-$topics = $uniqueTopics;
-
 // Fächer für jedes Thema laden
 $topicIds = array_column($topics, 'id');
 if (!empty($topicIds)) {
     $placeholders = str_repeat('?,', count($topicIds) - 1) . '?';
     $stmt = $db->prepare("
-        SELECT DISTINCT ts.topic_id, s.* 
+        SELECT ts.topic_id, s.* 
         FROM subjects s 
         JOIN topic_subjects ts ON s.id = ts.subject_id 
         WHERE ts.topic_id IN ($placeholders)
@@ -847,7 +834,7 @@ if (!empty($topicIds)) {
             </div>
 
             <form id="topicForm">
-                <input type="hidden" id="topicId" name="topic_id">
+                <input type="hidden" id="topicId" name="topic_id" value="">
                 <input type="hidden" name="csrf_token" value="<?= $_SESSION['csrf_token'] ?>">
 
                 <div class="form-group">
@@ -898,7 +885,6 @@ if (!empty($topicIds)) {
             'use strict';
             
             // Globale Variablen für diesen Scope
-            let isEditing = false;
             let currentView = 'grid';
             
             // AJAX URL definieren - abhängig vom Kontext
@@ -949,15 +935,15 @@ if (!empty($topicIds)) {
                 const form = document.getElementById('topicForm');
                 form.reset();
                 
-                // Explizit alle Felder leeren
-                document.getElementById('topicId').value = '';
+                // Explizit alle Felder leeren - WICHTIG: value="" setzen
+                const topicIdField = document.getElementById('topicId');
+                topicIdField.value = '';
+                topicIdField.removeAttribute('value'); // Auch das HTML-Attribut entfernen
+                
                 document.getElementById('topicTitle').value = '';
                 document.getElementById('shortDescription').value = '';
                 document.getElementById('isGlobal').checked = false;
                 document.getElementById('submitBtn').textContent = 'Erstellen';
-                
-                // Status auf CREATE setzen
-                isEditing = false;
                 
                 // Alle Subject-Checkboxes deaktivieren
                 document.querySelectorAll('.subject-checkbox').forEach(label => {
@@ -969,18 +955,23 @@ if (!empty($topicIds)) {
                 updateCharCounter();
                 document.getElementById('topicModal').classList.add('show');
                 
-                console.log('CREATE modal opened - isEditing:', isEditing, 'topicId:', document.getElementById('topicId').value);
+                console.log('CREATE modal opened - topicId:', document.getElementById('topicId').value);
             }
             
             window.closeModal = function() {
                 console.log('Closing modal - resetting state');
                 document.getElementById('topicModal').classList.remove('show');
                 
-                // Status komplett zurücksetzen
-                isEditing = false;
-                document.getElementById('topicId').value = '';
+                // Formular komplett zurücksetzen beim Schließen
+                const form = document.getElementById('topicForm');
+                form.reset();
                 
-                console.log('Modal closed - isEditing reset to:', isEditing);
+                // topic_id explizit leeren
+                const topicIdField = document.getElementById('topicId');
+                topicIdField.value = '';
+                topicIdField.removeAttribute('value');
+                
+                console.log('Modal closed - form reset');
             }
             
             window.showFlashMessage = function(message, type) {
@@ -998,9 +989,6 @@ if (!empty($topicIds)) {
                 
                 document.getElementById('modalTitle').textContent = 'Thema bearbeiten';
                 document.getElementById('submitBtn').textContent = 'Aktualisieren';
-                
-                // Status auf EDIT setzen
-                isEditing = true;
                 
                 try {
                     const formData = new FormData();
@@ -1021,7 +1009,10 @@ if (!empty($topicIds)) {
                         const topic = result.topic;
                         
                         // Explizit alle Werte setzen
-                        document.getElementById('topicId').value = topic.id;
+                        const topicIdField = document.getElementById('topicId');
+                        topicIdField.value = topic.id;
+                        topicIdField.setAttribute('value', topic.id); // Auch das HTML-Attribut setzen
+                        
                         document.getElementById('topicTitle').value = topic.title;
                         document.getElementById('shortDescription').value = topic.short_description || '';
                         document.getElementById('isGlobal').checked = topic.is_global == 1;
@@ -1038,7 +1029,7 @@ if (!empty($topicIds)) {
                         updateCharCounter();
                         document.getElementById('topicModal').classList.add('show');
                         
-                        console.log('EDIT modal opened - isEditing:', isEditing, 'topicId:', document.getElementById('topicId').value);
+                        console.log('EDIT modal opened - topicId:', document.getElementById('topicId').value);
                     } else {
                         showFlashMessage(result.message, 'error');
                     }
@@ -1098,46 +1089,52 @@ if (!empty($topicIds)) {
                         const originalText = submitBtn.textContent;
                         
                         // Status vor Submit prüfen
-                        const topicIdValue = document.getElementById('topicId').value.trim();
+                        const topicIdValue = document.getElementById('topicId').value;
                         const topicIdNum = parseInt(topicIdValue) || 0;
                         
                         console.log('=== FORM SUBMIT ===');
-                        console.log('isEditing:', isEditing);
                         console.log('topicIdValue:', topicIdValue);
                         console.log('topicIdNum:', topicIdNum);
                         console.log('URL:', url);
                         
-                        // Sehr strenge Logik für Action-Bestimmung
+                        // Action basierend auf topic_id bestimmen
                         let action;
-                        if (isEditing === true && topicIdNum > 0) {
+                        if (topicIdNum > 0) {
                             action = 'update_topic';
-                            console.log('→ ACTION: UPDATE (isEditing=true AND topicId>0)');
+                            console.log('→ ACTION: UPDATE (topicId > 0)');
                         } else {
                             action = 'create_topic';
-                            console.log('→ ACTION: CREATE (isEditing=false OR topicId<=0)');
+                            console.log('→ ACTION: CREATE (topicId <= 0)');
                         }
                         
                         submitBtn.textContent = action === 'create_topic' ? 'Erstellen...' : 'Aktualisieren...';
                         submitBtn.disabled = true;
 
                         try {
-                            const formData = new FormData(this);
+                            const formData = new FormData();
                             
                             // Action setzen
                             formData.append('action', action);
                             
-                            // Für CREATE: topic_id explizit entfernen
+                            // CSRF Token
+                            formData.append('csrf_token', '<?= $_SESSION['csrf_token'] ?>');
+                            
+                            // Für CREATE: topic_id explizit NICHT senden
                             if (action === 'create_topic') {
-                                formData.delete('topic_id');
-                                console.log('CREATE: topic_id removed from FormData');
+                                console.log('CREATE: topic_id wird NICHT gesendet');
                             } else {
-                                // Für UPDATE: topic_id validieren
+                                // Für UPDATE: topic_id validieren und senden
                                 if (topicIdNum <= 0) {
                                     throw new Error('Update ohne gültige Topic-ID nicht möglich');
                                 }
-                                formData.set('topic_id', topicIdNum.toString());
-                                console.log('UPDATE: topic_id set to', topicIdNum);
+                                formData.append('topic_id', topicIdNum.toString());
+                                console.log('UPDATE: topic_id gesendet:', topicIdNum);
                             }
+                            
+                            // Restliche Formularfelder
+                            formData.append('title', document.getElementById('topicTitle').value.trim());
+                            formData.append('short_description', document.getElementById('shortDescription').value.trim());
+                            formData.append('is_global', document.getElementById('isGlobal').checked ? '1' : '0');
                             
                             const selectedSubjects = [];
                             document.querySelectorAll('.subject-checkbox input:checked').forEach(input => {
@@ -1154,7 +1151,6 @@ if (!empty($topicIds)) {
                             }
                             
                             formData.append('subject_ids', JSON.stringify(selectedSubjects));
-                            formData.set('is_global', document.getElementById('isGlobal').checked ? '1' : '0');
 
                             // Debug: FormData ausgeben
                             console.log('=== FormData being sent ===');
