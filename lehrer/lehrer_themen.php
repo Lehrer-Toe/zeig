@@ -942,6 +942,7 @@ foreach ($topics as &$topic) {
     let isEditing = false;
     let currentView = 'grid'; // Standard: Kachel-Ansicht
     const csrfToken = '<?= $_SESSION['csrf_token'] ?>';
+    const ajaxUrl = window.location.href;
 
     // View Toggle funktionalität
     document.querySelectorAll('.view-btn').forEach(btn => {
@@ -1063,7 +1064,7 @@ foreach ($topics as &$topic) {
             formData.append('topic_id', topicId);
             formData.append('csrf_token', csrfToken);
 
-            const response = await fetch('', {
+            const response = await fetch(ajaxUrl, {
                 method: 'POST',
                 body: formData
             });
@@ -1115,7 +1116,7 @@ foreach ($topics as &$topic) {
             formData.append('topic_id', topicId);
             formData.append('csrf_token', csrfToken);
 
-            const response = await fetch('', {
+            const response = await fetch(ajaxUrl, {
                 method: 'POST',
                 body: formData
             });
@@ -1176,7 +1177,7 @@ foreach ($topics as &$topic) {
             });
             formData.append('subject_ids', JSON.stringify(selectedSubjects));
 
-            const response = await fetch('', {
+            const response = await fetch(ajaxUrl, {
                 method: 'POST',
                 body: formData
             });
