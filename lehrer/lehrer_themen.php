@@ -899,7 +899,7 @@ foreach ($topics as &$topic) {
                 </div>
                 
                 <div class="form-group">
-                    <label>Fächer *</label>
+                    <label>Fächer (optional)</label>
                     <div class="subject-grid">
                         <?php foreach ($subjects as $subject): ?>
                             <label class="subject-checkbox">

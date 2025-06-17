@@ -28,9 +28,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     throw new Exception('Titel ist erforderlich.');
                 }
                 
-                if (empty($subject_ids)) {
-                    throw new Exception('Mindestens ein Fach muss ausgewählt werden.');
-                }
                 
                 $db->beginTransaction();
                 
@@ -60,9 +57,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     throw new Exception('Titel ist erforderlich.');
                 }
                 
-                if (empty($subject_ids)) {
-                    throw new Exception('Mindestens ein Fach muss ausgewählt werden.');
-                }
                 
                 // Prüfen ob Thema dem Lehrer gehört
                 $stmt = $db->prepare("SELECT id FROM topics WHERE id = ? AND teacher_id = ? AND school_id = ?");
@@ -665,7 +659,7 @@ foreach ($topics as &$topic) {
                 </div>
 
                 <div class="form-group">
-                    <label class="form-label">Fächer auswählen *</label>
+                    <label class="form-label">Fächer auswählen (optional)</label>
                     <div class="subjects-grid" id="subjectsGrid">
                         <?php foreach ($subjects as $subject): ?>
                             <label class="subject-checkbox">
