@@ -98,7 +98,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         switch ($_POST['action']) {
             case 'create_topic':
                 $title = trim($_POST['title'] ?? '');
-                $description = trim($_POST['description'] ?? '');
                 $short_description = trim($_POST['short_description'] ?? '');
                 $is_global = (int)($_POST['is_global'] ?? 0);
                 $subject_ids = json_decode($_POST['subject_ids'] ?? '[]', true);
@@ -117,9 +116,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 
                 $db->beginTransaction();
                 
-                // Thema erstellen
-                $stmt = $db->prepare("INSERT INTO topics (school_id, teacher_id, title, description, short_description, is_global, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())");
-                $stmt->execute([$school_id, $teacher_id, $title, $description, $short_description, $is_global]);
+                // Thema erstellen (description als leerer String)
+                $stmt = $db->prepare("INSERT INTO topics (school_id, teacher_id, title, description, short_description, is_global, created_at, updated_at) VALUES (?, ?, ?, '', ?, ?, NOW(), NOW())");
+                $stmt->execute([$school_id, $teacher_id, $title, $short_description, $is_global]);
                 $topic_id = $db->lastInsertId();
                 
                 // Fächer zuordnen
@@ -136,7 +135,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             case 'update_topic':
                 $topic_id = (int)($_POST['topic_id'] ?? 0);
                 $title = trim($_POST['title'] ?? '');
-                $description = trim($_POST['description'] ?? '');
                 $short_description = trim($_POST['short_description'] ?? '');
                 $is_global = (int)($_POST['is_global'] ?? 0);
                 $subject_ids = json_decode($_POST['subject_ids'] ?? '[]', true);
@@ -162,9 +160,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 
                 $db->beginTransaction();
                 
-                // Thema aktualisieren
-                $stmt = $db->prepare("UPDATE topics SET title = ?, description = ?, short_description = ?, is_global = ?, updated_at = NOW() WHERE id = ?");
-                $stmt->execute([$title, $description, $short_description, $is_global, $topic_id]);
+                // Thema aktualisieren (description nicht ändern)
+                $stmt = $db->prepare("UPDATE topics SET title = ?, short_description = ?, is_global = ?, updated_at = NOW() WHERE id = ?");
+                $stmt->execute([$title, $short_description, $is_global, $topic_id]);
                 
                 // Alte Fachzuordnungen löschen
                 $stmt = $db->prepare("DELETE FROM topic_subjects WHERE topic_id = ?");
@@ -739,7 +737,7 @@ if (!empty($topicIds)) {
 
         textarea.form-control {
             resize: vertical;
-            min-height: 100px;
+            min-height: 80px;
         }
 
         .char-counter {
@@ -974,12 +972,6 @@ if (!empty($topicIds)) {
                                     </div>
                                 <?php endif; ?>
 
-                                <?php if (!empty($topic['description'])): ?>
-                                    <div class="topic-description">
-                                        <?= nl2br(htmlspecialchars($topic['description'])) ?>
-                                    </div>
-                                <?php endif; ?>
-
                                 <div class="topic-subjects">
                                     <?php foreach ($topic['subjects'] as $subject): ?>
                                         <span class="subject-tag" style="background-color: <?= htmlspecialchars($subject['color']) ?>">
@@ -1029,13 +1021,8 @@ if (!empty($topicIds)) {
 
                 <div class="form-group">
                     <label class="form-label" for="shortDescription">Kurzbeschreibung (240 Zeichen)</label>
-                    <textarea class="form-control" id="shortDescription" name="short_description" maxlength="240" oninput="updateCharCounter()"></textarea>
+                    <textarea class="form-control" id="shortDescription" name="short_description" maxlength="240" rows="4" oninput="updateCharCounter()"></textarea>
                     <div id="charCounter" class="char-counter">0 / 240</div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label" for="topicDescription">Ausführliche Beschreibung</label>
-                    <textarea class="form-control" id="topicDescription" name="description" rows="4"></textarea>
                 </div>
 
                 <div class="form-group">
@@ -1187,7 +1174,6 @@ if (!empty($topicIds)) {
                     document.getElementById('topicId').value = topic.id;
                     document.getElementById('topicTitle').value = topic.title;
                     document.getElementById('shortDescription').value = topic.short_description || '';
-                    document.getElementById('topicDescription').value = topic.description || '';
                     document.getElementById('isGlobal').checked = topic.is_global == 1;
                     
                     // Fächer setzen
@@ -1326,18 +1312,19 @@ if (!empty($topicIds)) {
         });
 
         document.querySelectorAll('.subject-checkbox').forEach(label => {
+            const checkbox = label.querySelector('input');
+            
+            // Label-Klick Handler
             label.addEventListener('click', function(e) {
                 if (e.target.tagName !== 'INPUT') {
-                    const checkbox = this.querySelector('input');
+                    e.preventDefault();
                     checkbox.checked = !checkbox.checked;
+                    this.classList.toggle('checked', checkbox.checked);
                 }
-                this.classList.toggle('checked', this.querySelector('input').checked);
             });
             
-            // Für direkte Checkbox-Klicks
-            const checkbox = label.querySelector('input');
+            // Checkbox-Change Handler
             checkbox.addEventListener('change', function(e) {
-                e.stopPropagation();
                 label.classList.toggle('checked', this.checked);
             });
         });
