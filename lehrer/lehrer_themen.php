@@ -217,7 +217,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     throw new Exception('Thema nicht gefunden.');
                 }
                 
-                $topic['subject_ids'] = $topic['subject_ids'] ? explode(',', $topic['subject_ids']) : [];
+                $topic['subject_ids'] = $topic['subject_ids'] ? array_map('intval', explode(',', $topic['subject_ids'])) : [];
                 $response['success'] = true;
                 $response['topic'] = $topic;
                 break;
@@ -258,40 +258,78 @@ switch ($sort_by) {
 
 // Themen abrufen basierend auf Filter
 if ($filter === 'global') {
-    // Globale Ansicht: Alle globalen Themen anzeigen
+    // Globale Ansicht: Alle globalen Themen anzeigen (auch eigene)
     $stmt = $db->prepare("
-        SELECT t.*, u.name as teacher_name, s.name as school_name
+        SELECT DISTINCT t.id, t.school_id, t.teacher_id, t.title, t.description, 
+               t.short_description, t.is_global, t.is_active, t.created_at, t.updated_at,
+               u.name as teacher_name, s.name as school_name
         FROM topics t 
         LEFT JOIN users u ON t.teacher_id = u.id
         LEFT JOIN schools s ON t.school_id = s.id
         WHERE t.is_global = 1 AND t.is_active = 1
+        GROUP BY t.id
         $order_clause
     ");
     $stmt->execute();
 } else {
-    // Lokale Ansicht: Nur eigene Themen
+    // Lokale Ansicht: Nur eigene Themen (unabhängig ob global oder nicht)
     $stmt = $db->prepare("
-        SELECT t.*, u.name as teacher_name
+        SELECT DISTINCT t.id, t.school_id, t.teacher_id, t.title, t.description, 
+               t.short_description, t.is_global, t.is_active, t.created_at, t.updated_at,
+               u.name as teacher_name
         FROM topics t 
         LEFT JOIN users u ON t.teacher_id = u.id
         WHERE t.school_id = ? AND t.teacher_id = ? AND t.is_active = 1
+        GROUP BY t.id
         $order_clause
     ");
     $stmt->execute([$school_id, $teacher_id]);
 }
-$topics = $stmt->fetchAll();
+$topics = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Duplikate entfernen (falls vorhanden)
+$uniqueTopics = [];
+$seenIds = [];
+foreach ($topics as $topic) {
+    if (!in_array($topic['id'], $seenIds)) {
+        $uniqueTopics[] = $topic;
+        $seenIds[] = $topic['id'];
+    }
+}
+$topics = $uniqueTopics;
 
 // Fächer für jedes Thema laden
-foreach ($topics as &$topic) {
+$topicIds = array_column($topics, 'id');
+if (!empty($topicIds)) {
+    $placeholders = str_repeat('?,', count($topicIds) - 1) . '?';
     $stmt = $db->prepare("
-        SELECT s.* 
+        SELECT DISTINCT ts.topic_id, s.* 
         FROM subjects s 
         JOIN topic_subjects ts ON s.id = ts.subject_id 
-        WHERE ts.topic_id = ? 
+        WHERE ts.topic_id IN ($placeholders)
         ORDER BY s.short_name
     ");
-    $stmt->execute([$topic['id']]);
-    $topic['subjects'] = $stmt->fetchAll();
+    $stmt->execute($topicIds);
+    $allSubjects = $stmt->fetchAll();
+    
+    // Subjects den Topics zuordnen
+    $subjectsByTopic = [];
+    foreach ($allSubjects as $subject) {
+        $topicId = $subject['topic_id'];
+        if (!isset($subjectsByTopic[$topicId])) {
+            $subjectsByTopic[$topicId] = [];
+        }
+        $subjectsByTopic[$topicId][] = $subject;
+    }
+    
+    // Topics mit Subjects anreichern
+    foreach ($topics as &$topic) {
+        $topic['subjects'] = $subjectsByTopic[$topic['id']] ?? [];
+    }
+} else {
+    foreach ($topics as &$topic) {
+        $topic['subjects'] = [];
+    }
 }
 ?>
 
@@ -883,9 +921,11 @@ foreach ($topics as &$topic) {
                 </select>
             </div>
 
-            <button class="btn btn-primary" onclick="openCreateModal()">
-                ➕ Neues Thema
-            </button>
+            <?php if ($filter === 'school'): ?>
+                <button class="btn btn-primary" onclick="openCreateModal()">
+                    ➕ Neues Thema
+                </button>
+            <?php endif; ?>
         </div>
 
         <div class="topics-grid" id="topicsContainer">
@@ -893,7 +933,7 @@ foreach ($topics as &$topic) {
                 <div class="empty-state" style="grid-column: 1 / -1;">
                     <div class="empty-state-icon">📚</div>
                     <h3><?= $filter === 'global' ? 'Keine globalen Themen gefunden' : 'Noch keine Themen vorhanden' ?></h3>
-                    <p><?= $filter === 'global' ? 'Es sind noch keine globalen Themen von anderen Lehrern verfügbar.' : 'Erstellen Sie Ihr erstes Projektthema für die Schüler.' ?></p>
+                    <p><?= $filter === 'global' ? 'Es sind noch keine globalen Themen von Lehrern verfügbar.' : 'Erstellen Sie Ihr erstes Projektthema für die Schüler.' ?></p>
                     <?php if ($filter === 'school'): ?>
                         <button class="btn btn-primary" onclick="openCreateModal()" style="margin-top: 20px;">
                             ➕ Erstes Thema erstellen
@@ -950,7 +990,11 @@ foreach ($topics as &$topic) {
                             </div>
                         </div>
 
-                        <?php if ($filter === 'school' || $topic['teacher_id'] == $teacher_id): ?>
+                        <?php 
+                        // Aktions-Buttons nur für eigene Themen anzeigen
+                        $isOwnTopic = ($topic['teacher_id'] == $teacher_id);
+                        if ($isOwnTopic): 
+                        ?>
                             <div class="topic-actions">
                                 <button class="btn btn-secondary btn-sm" onclick="editTopic(<?= $topic['id'] ?>)">
                                     ✏️ Bearbeiten
@@ -1057,9 +1101,15 @@ foreach ($topics as &$topic) {
 
         // Filter ändern
         function changeFilter(filter) {
-            const url = new URL(window.location);
-            url.searchParams.set('filter', filter);
-            window.location.href = url.toString();
+            const currentPath = window.location.pathname;
+            const searchParams = new URLSearchParams(window.location.search);
+            searchParams.set('filter', filter);
+            
+            if (currentPath.includes('dashboard.php')) {
+                searchParams.set('page', 'themen');
+            }
+            
+            window.location.href = currentPath + '?' + searchParams.toString();
         }
 
         // Character Counter
@@ -1102,6 +1152,7 @@ foreach ($topics as &$topic) {
         }
 
         async function editTopic(topicId) {
+            console.log('Edit topic - using AJAX URL:', ajaxUrl);
             document.getElementById('modalTitle').textContent = 'Thema bearbeiten';
             document.getElementById('submitBtn').textContent = 'Aktualisieren';
             isEditing = true;
@@ -1130,6 +1181,9 @@ foreach ($topics as &$topic) {
                 
                 if (result.success) {
                     const topic = result.topic;
+                    console.log('Topic data:', topic);
+                    console.log('Subject IDs:', topic.subject_ids);
+                    
                     document.getElementById('topicId').value = topic.id;
                     document.getElementById('topicTitle').value = topic.title;
                     document.getElementById('shortDescription').value = topic.short_description || '';
@@ -1140,8 +1194,9 @@ foreach ($topics as &$topic) {
                     document.querySelectorAll('.subject-checkbox').forEach(label => {
                         label.classList.remove('checked');
                         const checkbox = label.querySelector('input');
-                        checkbox.checked = topic.subject_ids.includes(checkbox.value);
-                        if (checkbox.checked) {
+                        const isChecked = topic.subject_ids.includes(checkbox.value) || topic.subject_ids.includes(parseInt(checkbox.value));
+                        checkbox.checked = isChecked;
+                        if (isChecked) {
                             label.classList.add('checked');
                         }
                     });
@@ -1158,6 +1213,7 @@ foreach ($topics as &$topic) {
         }
 
         async function deleteTopic(topicId) {
+            console.log('Delete topic - using AJAX URL:', ajaxUrl);
             if (!confirm('Sind Sie sicher, dass Sie dieses Thema löschen möchten?')) {
                 return;
             }
@@ -1189,7 +1245,9 @@ foreach ($topics as &$topic) {
                     document.querySelector(`[data-topic-id="${topicId}"]`).remove();
                     
                     if (document.querySelectorAll('.topic-card').length === 0) {
-                        location.reload();
+                        setTimeout(() => {
+                            window.location.href = window.location.href;
+                        }, 1000);
                     }
                 } else {
                     showFlashMessage(result.message, 'error');
@@ -1202,6 +1260,7 @@ foreach ($topics as &$topic) {
 
         document.getElementById('topicForm').addEventListener('submit', async function(e) {
             e.preventDefault();
+            console.log('Submit form - using AJAX URL:', ajaxUrl);
             
             const submitBtn = document.getElementById('submitBtn');
             const originalText = submitBtn.textContent;
@@ -1226,6 +1285,10 @@ foreach ($topics as &$topic) {
                 }
                 
                 formData.append('subject_ids', JSON.stringify(selectedSubjects));
+                
+                // is_global explizit setzen
+                const isGlobal = document.getElementById('isGlobal').checked ? '1' : '0';
+                formData.set('is_global', isGlobal);
 
                 const response = await fetch('', {
                     method: 'POST',
@@ -1246,7 +1309,10 @@ foreach ($topics as &$topic) {
                 if (result.success) {
                     showFlashMessage(result.message, 'success');
                     closeModal();
-                    setTimeout(() => location.reload(), 1000);
+                    // Seite mit aktuellen Parametern neu laden
+                    setTimeout(() => {
+                        window.location.href = window.location.href;
+                    }, 1000);
                 } else {
                     showFlashMessage(result.message, 'error');
                 }
@@ -1278,9 +1344,11 @@ foreach ($topics as &$topic) {
 
         document.getElementById('sortSelect').addEventListener('change', function() {
             const sortBy = this.value;
-            const url = new URL(window.location);
-            url.searchParams.set('sort', sortBy);
-            window.location.href = url.toString();
+            const currentPath = window.location.pathname;
+            const searchParams = new URLSearchParams(window.location.search);
+            searchParams.set('sort', sortBy);
+            
+            window.location.href = currentPath + '?' + searchParams.toString();
         });
 
         function showFlashMessage(message, type) {
