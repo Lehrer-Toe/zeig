@@ -54,6 +54,19 @@ CREATE TABLE IF NOT EXISTS `topics` (
   FOREIGN KEY (`teacher_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
+CREATE TABLE IF NOT EXISTS `topic_subjects` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `topic_id` int(11) NOT NULL,
+  `subject_id` int(11) NOT NULL,
+  `created_at` timestamp NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `unique_topic_subject` (`topic_id`,`subject_id`),
+  KEY `idx_topic_id` (`topic_id`),
+  KEY `idx_subject_id` (`subject_id`),
+  FOREIGN KEY (`topic_id`) REFERENCES `topics` (`id`) ON DELETE CASCADE,
+  FOREIGN KEY (`subject_id`) REFERENCES `subjects` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
 -- Falls nur die neuen Felder fehlen:
 ALTER TABLE `topics` 
 ADD COLUMN IF NOT EXISTS `short_description` VARCHAR(240) DEFAULT NULL COMMENT \'240 Zeichen Kurzbeschreibung\',
@@ -84,68 +97,59 @@ $sort_by = $_GET['sort'] ?? 'alphabetic';
 $order_clause = "ORDER BY t.title ASC";
 switch ($sort_by) {
     case 'date':
-        $order_clause = "ORDER BY t.created_at DESC";
+        $order_clause = "ORDER BY t.created_at DESC, t.id DESC";
         break;
     case 'updated':
-        $order_clause = "ORDER BY t.updated_at DESC";
+        $order_clause = "ORDER BY t.updated_at DESC, t.id DESC";
+        break;
+    default:
+        $order_clause = "ORDER BY t.title ASC, t.id DESC";
         break;
 }
 
-// Themen abrufen basierend auf Filter
+// Themen abrufen - FIXED: Ohne GROUP BY um Probleme zu vermeiden
 if ($filter === 'global') {
-    // Globale Ansicht: Alle globalen Themen anzeigen (auch eigene)
+    // Globale Ansicht: Alle globalen Themen anzeigen
     $stmt = $db->prepare("
-        SELECT DISTINCT t.id, t.school_id, t.teacher_id, t.title, t.description, 
+        SELECT t.id, t.school_id, t.teacher_id, t.title, t.description, 
                t.short_description, t.is_global, t.is_active, t.created_at, t.updated_at,
                u.name as teacher_name, s.name as school_name
         FROM topics t 
         LEFT JOIN users u ON t.teacher_id = u.id
         LEFT JOIN schools s ON t.school_id = s.id
         WHERE t.is_global = 1 AND t.is_active = 1
-        GROUP BY t.id
         $order_clause
     ");
     $stmt->execute();
 } else {
-    // Lokale Ansicht: Nur eigene Themen (unabhängig ob global oder nicht)
+    // Lokale Ansicht: Nur eigene Themen
     $stmt = $db->prepare("
-        SELECT DISTINCT t.id, t.school_id, t.teacher_id, t.title, t.description, 
+        SELECT t.id, t.school_id, t.teacher_id, t.title, t.description, 
                t.short_description, t.is_global, t.is_active, t.created_at, t.updated_at,
                u.name as teacher_name
         FROM topics t 
         LEFT JOIN users u ON t.teacher_id = u.id
         WHERE t.school_id = ? AND t.teacher_id = ? AND t.is_active = 1
-        GROUP BY t.id
         $order_clause
     ");
     $stmt->execute([$school_id, $teacher_id]);
 }
 $topics = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Duplikate entfernen (falls vorhanden)
-$uniqueTopics = [];
-$seenIds = [];
-foreach ($topics as $topic) {
-    if (!in_array($topic['id'], $seenIds)) {
-        $uniqueTopics[] = $topic;
-        $seenIds[] = $topic['id'];
-    }
-}
-$topics = $uniqueTopics;
-
-// Fächer für jedes Thema laden
-$topicIds = array_column($topics, 'id');
-if (!empty($topicIds)) {
+// Fächer für jedes Thema laden - FIXED: Bessere Query
+if (!empty($topics)) {
+    $topicIds = array_column($topics, 'id');
     $placeholders = str_repeat('?,', count($topicIds) - 1) . '?';
+    
     $stmt = $db->prepare("
-        SELECT DISTINCT ts.topic_id, s.* 
-        FROM subjects s 
-        JOIN topic_subjects ts ON s.id = ts.subject_id 
-        WHERE ts.topic_id IN ($placeholders)
-        ORDER BY s.short_name
+        SELECT ts.topic_id, s.id, s.short_name, s.full_name, s.color 
+        FROM topic_subjects ts 
+        JOIN subjects s ON ts.subject_id = s.id 
+        WHERE ts.topic_id IN ($placeholders) AND s.is_active = 1
+        ORDER BY ts.topic_id, s.short_name
     ");
     $stmt->execute($topicIds);
-    $allSubjects = $stmt->fetchAll();
+    $allSubjects = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     // Subjects den Topics zuordnen
     $subjectsByTopic = [];
@@ -160,10 +164,6 @@ if (!empty($topicIds)) {
     // Topics mit Subjects anreichern
     foreach ($topics as &$topic) {
         $topic['subjects'] = $subjectsByTopic[$topic['id']] ?? [];
-    }
-} else {
-    foreach ($topics as &$topic) {
-        $topic['subjects'] = [];
     }
 }
 ?>
@@ -894,350 +894,299 @@ if (!empty($topicIds)) {
     </div>
 
     <script>
-        (function() {
-            'use strict';
-            
-            // Globale Variablen für diesen Scope
-            let isEditing = false;
-            let currentView = 'grid';
-            
-            // AJAX URL definieren - abhängig vom Kontext
-            function getAjaxUrl() {
-                const path = window.location.pathname;
-                if (path.includes('dashboard.php')) {
-                    return 'dashboard.php';
-                }
-                return window.location.pathname;
+        let isSubmitting = false;
+        
+        // AJAX URL definieren
+        function getAjaxUrl() {
+            const path = window.location.pathname;
+            if (path.includes('dashboard.php')) {
+                return 'dashboard.php';
             }
+            return window.location.pathname;
+        }
+        
+        function switchView(view) {
+            document.querySelectorAll('.view-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.view === view);
+            });
+            const container = document.getElementById('topicsContainer');
+            container.className = view === 'list' ? 'topics-list' : 'topics-grid';
+        }
+        
+        function changeFilter(filter) {
+            const searchParams = new URLSearchParams(window.location.search);
+            searchParams.set('filter', filter);
+            if (window.location.pathname.includes('dashboard.php')) {
+                searchParams.set('page', 'themen');
+            }
+            window.location.href = window.location.pathname + '?' + searchParams.toString();
+        }
+        
+        function updateCharCounter() {
+            const textarea = document.getElementById('shortDescription');
+            const counter = document.getElementById('charCounter');
+            if (textarea && counter) {
+                const length = textarea.value.length;
+                counter.textContent = length + ' / 240';
+                counter.className = 'char-counter';
+                if (length > 200) counter.classList.add('warning');
+                if (length > 240) counter.classList.add('error');
+            }
+        }
+        
+        function openCreateModal() {
+            // Reset form state
+            document.getElementById('modalTitle').textContent = 'Neues Thema';
+            document.getElementById('submitBtn').textContent = 'Erstellen';
             
-            // Funktionen im globalen Scope verfügbar machen
-            window.switchView = function(view) {
-                currentView = view;
-                document.querySelectorAll('.view-btn').forEach(btn => {
-                    btn.classList.toggle('active', btn.dataset.view === view);
+            // Clear form
+            const form = document.getElementById('topicForm');
+            form.reset();
+            
+            // Explicitly clear topic ID
+            document.getElementById('topicId').value = '';
+            document.getElementById('topicId').removeAttribute('value');
+            
+            // Clear checkboxes
+            document.querySelectorAll('.subject-checkbox').forEach(label => {
+                label.classList.remove('checked');
+                const checkbox = label.querySelector('input');
+                checkbox.checked = false;
+            });
+            
+            updateCharCounter();
+            document.getElementById('topicModal').classList.add('show');
+        }
+        
+        function closeModal() {
+            document.getElementById('topicModal').classList.remove('show');
+            const form = document.getElementById('topicForm');
+            form.reset();
+            document.getElementById('topicId').value = '';
+            isSubmitting = false;
+        }
+        
+        function showFlashMessage(message, type) {
+            const flashContainer = document.getElementById('flash-messages');
+            const flash = document.createElement('div');
+            flash.className = 'flash-message flash-' + type;
+            flash.textContent = message;
+            flashContainer.appendChild(flash);
+            setTimeout(() => { flash.remove(); }, 5000);
+        }
+        
+        async function editTopic(topicId) {
+            const url = getAjaxUrl();
+            
+            try {
+                const formData = new FormData();
+                formData.append('action', 'get_topic');
+                formData.append('topic_id', topicId);
+                formData.append('csrf_token', '<?= $_SESSION['csrf_token'] ?>');
+
+                const response = await fetch(url, {
+                    method: 'POST',
+                    body: formData
                 });
-                const container = document.getElementById('topicsContainer');
-                container.className = view === 'list' ? 'topics-list' : 'topics-grid';
-            }
-            
-            window.changeFilter = function(filter) {
-                const searchParams = new URLSearchParams(window.location.search);
-                searchParams.set('filter', filter);
-                if (window.location.pathname.includes('dashboard.php')) {
-                    searchParams.set('page', 'themen');
-                }
-                window.location.href = window.location.pathname + '?' + searchParams.toString();
-            }
-            
-            window.updateCharCounter = function() {
-                const textarea = document.getElementById('shortDescription');
-                const counter = document.getElementById('charCounter');
-                if (textarea && counter) {
-                    const length = textarea.value.length;
-                    counter.textContent = length + ' / 240';
-                    counter.className = 'char-counter';
-                    if (length > 200) counter.classList.add('warning');
-                    if (length > 240) counter.classList.add('error');
-                }
-            }
-            
-            window.openCreateModal = function() {
-                console.log('Opening CREATE modal');
-                document.getElementById('modalTitle').textContent = 'Neues Thema';
-                
-                // Form komplett zurücksetzen
-                const form = document.getElementById('topicForm');
-                form.reset();
-                
-                // Explizit alle Felder leeren
-                document.getElementById('topicId').value = '';
-                document.getElementById('topicTitle').value = '';
-                document.getElementById('shortDescription').value = '';
-                document.getElementById('isGlobal').checked = false;
-                document.getElementById('submitBtn').textContent = 'Erstellen';
-                
-                // Status auf CREATE setzen
-                isEditing = false;
-                
-                // Alle Subject-Checkboxes deaktivieren
-                document.querySelectorAll('.subject-checkbox').forEach(label => {
-                    label.classList.remove('checked');
-                    const checkbox = label.querySelector('input');
-                    checkbox.checked = false;
-                });
-                
-                updateCharCounter();
-                document.getElementById('topicModal').classList.add('show');
-                
-                console.log('CREATE modal opened - isEditing:', isEditing, 'topicId:', document.getElementById('topicId').value);
-            }
-            
-            window.closeModal = function() {
-                console.log('Closing modal - resetting state');
-                document.getElementById('topicModal').classList.remove('show');
-                
-                // Status komplett zurücksetzen
-                isEditing = false;
-                document.getElementById('topicId').value = '';
-                
-                console.log('Modal closed - isEditing reset to:', isEditing);
-            }
-            
-            window.showFlashMessage = function(message, type) {
-                const flashContainer = document.getElementById('flash-messages');
-                const flash = document.createElement('div');
-                flash.className = 'flash-message flash-' + type;
-                flash.textContent = message;
-                flashContainer.appendChild(flash);
-                setTimeout(() => { flash.remove(); }, 5000);
-            }
-            
-            window.editTopic = async function(topicId) {
-                const url = getAjaxUrl();
-                console.log('Opening EDIT modal for topic:', topicId, '- URL:', url);
-                
-                document.getElementById('modalTitle').textContent = 'Thema bearbeiten';
-                document.getElementById('submitBtn').textContent = 'Aktualisieren';
-                
-                // Status auf EDIT setzen
-                isEditing = true;
-                
-                try {
-                    const formData = new FormData();
-                    formData.append('action', 'get_topic');
-                    formData.append('topic_id', topicId);
-                    formData.append('csrf_token', '<?= $_SESSION['csrf_token'] ?>');
 
-                    const response = await fetch(url, {
-                        method: 'POST',
-                        body: formData
-                    });
+                if (!response.ok) throw new Error('Server-Fehler: ' + response.status);
 
-                    if (!response.ok) throw new Error('Server-Fehler: ' + response.status);
-
-                    const result = await response.json();
+                const result = await response.json();
+                
+                if (result.success) {
+                    const topic = result.topic;
                     
-                    if (result.success) {
-                        const topic = result.topic;
+                    // Set modal to edit mode
+                    document.getElementById('modalTitle').textContent = 'Thema bearbeiten';
+                    document.getElementById('submitBtn').textContent = 'Aktualisieren';
+                    
+                    // Fill form
+                    document.getElementById('topicId').value = topic.id;
+                    document.getElementById('topicTitle').value = topic.title;
+                    document.getElementById('shortDescription').value = topic.short_description || '';
+                    document.getElementById('isGlobal').checked = topic.is_global == 1;
+                    
+                    // Set checkboxes
+                    document.querySelectorAll('.subject-checkbox').forEach(label => {
+                        label.classList.remove('checked');
+                        const checkbox = label.querySelector('input');
+                        const isChecked = topic.subject_ids.includes(parseInt(checkbox.value));
+                        checkbox.checked = isChecked;
+                        if (isChecked) label.classList.add('checked');
+                    });
+                    
+                    updateCharCounter();
+                    document.getElementById('topicModal').classList.add('show');
+                } else {
+                    showFlashMessage(result.message, 'error');
+                }
+            } catch (error) {
+                showFlashMessage('Fehler: ' + error.message, 'error');
+            }
+        }
+        
+        async function deleteTopic(topicId) {
+            const url = getAjaxUrl();
+            
+            if (!confirm('Sind Sie sicher, dass Sie dieses Thema löschen möchten?')) return;
+
+            try {
+                const formData = new FormData();
+                formData.append('action', 'delete_topic');
+                formData.append('topic_id', topicId);
+                formData.append('csrf_token', '<?= $_SESSION['csrf_token'] ?>');
+
+                const response = await fetch(url, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) throw new Error('Server-Fehler: ' + response.status);
+
+                const result = await response.json();
+                
+                if (result.success) {
+                    showFlashMessage(result.message, 'success');
+                    // Remove card with animation
+                    const card = document.querySelector('[data-topic-id="' + topicId + '"]');
+                    if (card) {
+                        card.style.opacity = '0';
+                        card.style.transform = 'scale(0.9)';
+                        setTimeout(() => {
+                            card.remove();
+                            // Reload if no more topics
+                            if (document.querySelectorAll('.topic-card').length === 0) {
+                                window.location.reload();
+                            }
+                        }, 300);
+                    }
+                } else {
+                    showFlashMessage(result.message, 'error');
+                }
+            } catch (error) {
+                showFlashMessage('Fehler: ' + error.message, 'error');
+            }
+        }
+        
+        // Event Listeners
+        document.addEventListener('DOMContentLoaded', function() {
+            const form = document.getElementById('topicForm');
+            if (form) {
+                form.addEventListener('submit', async function(e) {
+                    e.preventDefault();
+                    
+                    if (isSubmitting) return;
+                    isSubmitting = true;
+                    
+                    const url = getAjaxUrl();
+                    const submitBtn = document.getElementById('submitBtn');
+                    const originalText = submitBtn.textContent;
+                    
+                    const topicId = document.getElementById('topicId').value;
+                    const action = topicId ? 'update_topic' : 'create_topic';
+                    
+                    submitBtn.textContent = 'Speichern...';
+                    submitBtn.disabled = true;
+
+                    try {
+                        const formData = new FormData();
+                        formData.append('action', action);
+                        formData.append('csrf_token', '<?= $_SESSION['csrf_token'] ?>');
                         
-                        // Explizit alle Werte setzen
-                        document.getElementById('topicId').value = topic.id;
-                        document.getElementById('topicTitle').value = topic.title;
-                        document.getElementById('shortDescription').value = topic.short_description || '';
-                        document.getElementById('isGlobal').checked = topic.is_global == 1;
+                        if (action === 'update_topic' && topicId) {
+                            formData.append('topic_id', topicId);
+                        }
                         
-                        // Subject-Checkboxes setzen
-                        document.querySelectorAll('.subject-checkbox').forEach(label => {
-                            label.classList.remove('checked');
-                            const checkbox = label.querySelector('input');
-                            const isChecked = topic.subject_ids.includes(parseInt(checkbox.value));
-                            checkbox.checked = isChecked;
-                            if (isChecked) label.classList.add('checked');
+                        formData.append('title', document.getElementById('topicTitle').value.trim());
+                        formData.append('short_description', document.getElementById('shortDescription').value.trim());
+                        formData.append('is_global', document.getElementById('isGlobal').checked ? '1' : '0');
+                        
+                        const selectedSubjects = [];
+                        document.querySelectorAll('.subject-checkbox input:checked').forEach(input => {
+                            selectedSubjects.push(input.value);
                         });
                         
-                        updateCharCounter();
-                        document.getElementById('topicModal').classList.add('show');
-                        
-                        console.log('EDIT modal opened - isEditing:', isEditing, 'topicId:', document.getElementById('topicId').value);
-                    } else {
-                        showFlashMessage(result.message, 'error');
-                    }
-                } catch (error) {
-                    showFlashMessage('Fehler: ' + error.message, 'error');
-                    console.error('Edit error:', error);
-                }
-            }
-            
-            window.deleteTopic = async function(topicId) {
-                const url = getAjaxUrl();
-                console.log('Delete topic - URL:', url);
-                
-                if (!confirm('Sind Sie sicher, dass Sie dieses Thema löschen möchten?')) return;
-
-                try {
-                    const formData = new FormData();
-                    formData.append('action', 'delete_topic');
-                    formData.append('topic_id', topicId);
-                    formData.append('csrf_token', '<?= $_SESSION['csrf_token'] ?>');
-
-                    const response = await fetch(url, {
-                        method: 'POST',
-                        body: formData
-                    });
-
-                    if (!response.ok) throw new Error('Server-Fehler: ' + response.status);
-
-                    const result = await response.json();
-                    
-                    if (result.success) {
-                        showFlashMessage(result.message, 'success');
-                        document.querySelector('[data-topic-id="' + topicId + '"]').remove();
-                        
-                        if (document.querySelectorAll('.topic-card').length === 0) {
-                            setTimeout(() => { window.location.reload(); }, 1000);
+                        if (selectedSubjects.length === 0) {
+                            throw new Error('Bitte wählen Sie mindestens ein Fach aus.');
                         }
-                    } else {
-                        showFlashMessage(result.message, 'error');
-                    }
-                } catch (error) {
-                    showFlashMessage('Fehler: ' + error.message, 'error');
-                    console.error('Delete error:', error);
-                }
-            }
-            
-            // Event Listener nach DOM-Laden
-            document.addEventListener('DOMContentLoaded', function() {
-                // Form Submit Handler
-                const form = document.getElementById('topicForm');
-                if (form) {
-                    form.addEventListener('submit', async function(e) {
-                        e.preventDefault();
                         
-                        const url = getAjaxUrl();
-                        const submitBtn = document.getElementById('submitBtn');
-                        const originalText = submitBtn.textContent;
+                        formData.append('subject_ids', JSON.stringify(selectedSubjects));
+
+                        const response = await fetch(url, {
+                            method: 'POST',
+                            body: formData
+                        });
+
+                        const result = await response.json();
                         
-                        // Status vor Submit prüfen
-                        const topicIdValue = document.getElementById('topicId').value.trim();
-                        const topicIdNum = parseInt(topicIdValue) || 0;
-                        
-                        console.log('=== FORM SUBMIT ===');
-                        console.log('isEditing:', isEditing);
-                        console.log('topicIdValue:', topicIdValue);
-                        console.log('topicIdNum:', topicIdNum);
-                        console.log('URL:', url);
-                        
-                        // Sehr strenge Logik für Action-Bestimmung
-                        let action;
-                        if (isEditing === true && topicIdNum > 0) {
-                            action = 'update_topic';
-                            console.log('→ ACTION: UPDATE (isEditing=true AND topicId>0)');
+                        if (result.success) {
+                            showFlashMessage(result.message, 'success');
+                            closeModal();
+                            // Warte etwas länger bevor Reload
+                            setTimeout(() => {
+                                window.location.reload();
+                            }, 800);
                         } else {
-                            action = 'create_topic';
-                            console.log('→ ACTION: CREATE (isEditing=false OR topicId<=0)');
+                            throw new Error(result.message || 'Unbekannter Fehler');
                         }
-                        
-                        submitBtn.textContent = action === 'create_topic' ? 'Erstellen...' : 'Aktualisieren...';
-                        submitBtn.disabled = true;
-
-                        try {
-                            const formData = new FormData(this);
-                            
-                            // Action setzen
-                            formData.append('action', action);
-                            
-                            // Für CREATE: topic_id explizit entfernen
-                            if (action === 'create_topic') {
-                                formData.delete('topic_id');
-                                console.log('CREATE: topic_id removed from FormData');
-                            } else {
-                                // Für UPDATE: topic_id validieren
-                                if (topicIdNum <= 0) {
-                                    throw new Error('Update ohne gültige Topic-ID nicht möglich');
-                                }
-                                formData.set('topic_id', topicIdNum.toString());
-                                console.log('UPDATE: topic_id set to', topicIdNum);
-                            }
-                            
-                            const selectedSubjects = [];
-                            document.querySelectorAll('.subject-checkbox input:checked').forEach(input => {
-                                selectedSubjects.push(input.value);
-                            });
-                            
-                            console.log('Selected subjects:', selectedSubjects);
-                            
-                            if (selectedSubjects.length === 0) {
-                                showFlashMessage('Bitte wählen Sie mindestens ein Fach aus.', 'error');
-                                submitBtn.textContent = originalText;
-                                submitBtn.disabled = false;
-                                return;
-                            }
-                            
-                            formData.append('subject_ids', JSON.stringify(selectedSubjects));
-                            formData.set('is_global', document.getElementById('isGlobal').checked ? '1' : '0');
-
-                            // Debug: FormData ausgeben
-                            console.log('=== FormData being sent ===');
-                            for (let [key, value] of formData.entries()) {
-                                console.log(key + ': ' + value);
-                            }
-
-                            const response = await fetch(url, {
-                                method: 'POST',
-                                body: formData
-                            });
-
-                            if (!response.ok) throw new Error('Server-Fehler: ' + response.status);
-
-                            const result = await response.json();
-                            console.log('Server response:', result);
-                            
-                            if (result.success) {
-                                showFlashMessage(result.message, 'success');
-                                closeModal();
-                                setTimeout(() => { window.location.reload(); }, 1000);
-                            } else {
-                                showFlashMessage(result.message, 'error');
-                            }
-                        } catch (error) {
-                            showFlashMessage('Fehler: ' + error.message, 'error');
-                            console.error('Submit error:', error);
-                        } finally {
-                            submitBtn.textContent = originalText;
-                            submitBtn.disabled = false;
-                        }
-                    });
-                }
-
-                // View Toggle Handler
-                document.querySelectorAll('.view-btn').forEach(btn => {
-                    btn.addEventListener('click', function() {
-                        switchView(this.dataset.view);
-                    });
-                });
-
-                // Checkbox Handler
-                document.querySelectorAll('.subject-checkbox').forEach(label => {
-                    const checkbox = label.querySelector('input');
-                    
-                    label.addEventListener('click', function(e) {
-                        if (e.target.tagName !== 'INPUT') {
-                            e.preventDefault();
-                            checkbox.checked = !checkbox.checked;
-                            this.classList.toggle('checked', checkbox.checked);
-                        }
-                    });
-                    
-                    checkbox.addEventListener('change', function() {
-                        label.classList.toggle('checked', this.checked);
-                    });
-                });
-
-                // Sort Handler
-                const sortSelect = document.getElementById('sortSelect');
-                if (sortSelect) {
-                    sortSelect.addEventListener('change', function() {
-                        const searchParams = new URLSearchParams(window.location.search);
-                        searchParams.set('sort', this.value);
-                        window.location.href = window.location.pathname + '?' + searchParams.toString();
-                    });
-                }
-
-                // Modal Handler
-                document.getElementById('topicModal').addEventListener('click', function(e) {
-                    if (e.target === this) closeModal();
-                });
-
-                document.addEventListener('keydown', function(e) {
-                    if (e.key === 'Escape' && document.getElementById('topicModal').classList.contains('show')) {
-                        closeModal();
+                    } catch (error) {
+                        showFlashMessage(error.message, 'error');
+                    } finally {
+                        submitBtn.textContent = originalText;
+                        submitBtn.disabled = false;
+                        isSubmitting = false;
                     }
                 });
+            }
 
-                updateCharCounter();
-                console.log('Themen-Modul geladen und bereit!');
+            // View Toggle
+            document.querySelectorAll('.view-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    switchView(this.dataset.view);
+                });
             });
-        })();
+
+            // Checkbox Handler
+            document.querySelectorAll('.subject-checkbox').forEach(label => {
+                const checkbox = label.querySelector('input');
+                
+                label.addEventListener('click', function(e) {
+                    if (e.target.tagName !== 'INPUT') {
+                        e.preventDefault();
+                        checkbox.checked = !checkbox.checked;
+                        this.classList.toggle('checked', checkbox.checked);
+                    }
+                });
+                
+                checkbox.addEventListener('change', function() {
+                    label.classList.toggle('checked', this.checked);
+                });
+            });
+
+            // Sort Handler
+            const sortSelect = document.getElementById('sortSelect');
+            if (sortSelect) {
+                sortSelect.addEventListener('change', function() {
+                    const searchParams = new URLSearchParams(window.location.search);
+                    searchParams.set('sort', this.value);
+                    window.location.href = window.location.pathname + '?' + searchParams.toString();
+                });
+            }
+
+            // Modal close on background click
+            document.getElementById('topicModal').addEventListener('click', function(e) {
+                if (e.target === this) closeModal();
+            });
+
+            // ESC key handler
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape' && document.getElementById('topicModal').classList.contains('show')) {
+                    closeModal();
+                }
+            });
+
+            updateCharCounter();
+        });
     </script>
 </body>
 </html>
