@@ -11,65 +11,190 @@ $db = getDB();
 $teacher_id = $_SESSION['user_id'];
 $school_id = $_SESSION['school_id'];
 
-// Prüfen ob Themen-Tabellen existieren und erweiterte Felder vorhanden sind
-try {
-    $db->query("SELECT 1 FROM topics LIMIT 1");
-    $db->query("SELECT 1 FROM topic_subjects LIMIT 1");
-    
-    // Prüfen ob neue Felder existieren
-    $result = $db->query("SHOW COLUMNS FROM topics LIKE 'short_description'");
-    if (!$result->fetch()) {
-        throw new Exception("short_description field missing");
-    }
-    
-    $result = $db->query("SHOW COLUMNS FROM topics LIKE 'is_global'");
-    if (!$result->fetch()) {
-        throw new Exception("is_global field missing");
-    }
-} catch (Exception $e) {
-    die('
-    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; background: rgba(255,255,255,0.95); color: #001133; border-radius: 15px; box-shadow: 0 8px 32px rgba(0,0,0,0.2);">
-        <h2 style="color: #ef4444;">⚠️ Datenbankfehler</h2>
-        <p>Die Themen-Tabellen sind noch nicht vollständig erstellt oder die neuen Felder fehlen.</p>
-        <p>Bitte führen Sie zuerst diese SQL-Befehle aus:</p>
-        <pre style="background: #f8f9fa; padding: 15px; border-radius: 5px; overflow: auto; font-size: 12px; border: 1px solid #ddd;">
--- Falls Tabellen nicht existieren:
-CREATE TABLE IF NOT EXISTS `topics` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `school_id` int(11) NOT NULL,
-  `teacher_id` int(11) NOT NULL,
-  `title` varchar(255) NOT NULL,
-  `description` text DEFAULT NULL,
-  `short_description` varchar(240) DEFAULT NULL,
-  `is_global` tinyint(1) DEFAULT 0,
-  `is_active` tinyint(1) DEFAULT 1,
-  `created_at` timestamp NULL DEFAULT current_timestamp(),
-  `updated_at` timestamp NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
-  PRIMARY KEY (`id`),
-  KEY `idx_school_id` (`school_id`),
-  KEY `idx_teacher_id` (`teacher_id`),
-  KEY `idx_active` (`is_active`),
-  KEY `idx_global` (`is_global`),
-  FOREIGN KEY (`school_id`) REFERENCES `schools` (`id`) ON DELETE CASCADE,
-  FOREIGN KEY (`teacher_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
-
--- Falls nur die neuen Felder fehlen:
-ALTER TABLE `topics` 
-ADD COLUMN IF NOT EXISTS `short_description` VARCHAR(240) DEFAULT NULL COMMENT \'240 Zeichen Kurzbeschreibung\',
-ADD COLUMN IF NOT EXISTS `is_global` TINYINT(1) DEFAULT 0 COMMENT \'Ob das Thema global für andere Schulen sichtbar ist\';
-
--- Index für bessere Performance bei globalen Themen
-CREATE INDEX IF NOT EXISTS idx_topics_global ON topics(is_global, is_active);
-        </pre>
-        <p><a href="dashboard.php" style="color: #ff9900; text-decoration: none; font-weight: 600;">← Zurück zum Dashboard</a></p>
-    </div>
-    ');
-}
-
-// CSRF-Token generieren falls nicht vorhanden
+// CSRF-Token generieren
 if (!isset($_SESSION['csrf_token'])) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
+// === FORMULAR-VERARBEITUNG - MUSS VOR JEDER HTML-AUSGABE STEHEN ===
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form_action'])) {
+    try {
+        // CSRF-Token prüfen
+        if (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
+            throw new Exception('Ungültiger CSRF-Token');
+        }
+        
+        switch ($_POST['form_action']) {
+            case 'create_topic':
+                $title = trim($_POST['title'] ?? '');
+                $short_description = trim($_POST['short_description'] ?? '');
+                $is_global = isset($_POST['is_global']) ? 1 : 0;
+                $subject_ids = $_POST['subjects'] ?? [];
+                
+                if (empty($title)) {
+                    throw new Exception('Titel ist erforderlich.');
+                }
+                
+                if (mb_strlen($short_description) > 240) {
+                    throw new Exception('Kurzbeschreibung darf maximal 240 Zeichen haben.');
+                }
+                
+                $db->beginTransaction();
+                
+                // Thema erstellen
+                $stmt = $db->prepare("INSERT INTO topics (school_id, teacher_id, title, description, short_description, is_global, created_at, updated_at) VALUES (?, ?, ?, '', ?, ?, NOW(), NOW())");
+                $stmt->execute([$school_id, $teacher_id, $title, $short_description, $is_global]);
+                $new_topic_id = $db->lastInsertId();
+                
+                // Fächer zuordnen
+                if (!empty($subject_ids) && is_array($subject_ids)) {
+                    $stmt = $db->prepare("INSERT INTO topic_subjects (topic_id, subject_id) VALUES (?, ?)");
+                    foreach ($subject_ids as $subject_id) {
+                        $stmt->execute([$new_topic_id, (int)$subject_id]);
+                    }
+                }
+                
+                $db->commit();
+                $_SESSION['flash_message'] = 'Thema erfolgreich erstellt.';
+                $_SESSION['flash_type'] = 'success';
+                break;
+                
+            case 'update_topic':
+                $topic_id = (int)($_POST['topic_id'] ?? 0);
+                $title = trim($_POST['title'] ?? '');
+                $short_description = trim($_POST['short_description'] ?? '');
+                $is_global = isset($_POST['is_global']) ? 1 : 0;
+                $subject_ids = $_POST['subjects'] ?? [];
+                
+                if ($topic_id <= 0) {
+                    throw new Exception('Ungültige Thema-ID.');
+                }
+                
+                if (empty($title)) {
+                    throw new Exception('Titel ist erforderlich.');
+                }
+                
+                if (mb_strlen($short_description) > 240) {
+                    throw new Exception('Kurzbeschreibung darf maximal 240 Zeichen haben.');
+                }
+                
+                // Prüfen ob Thema dem Lehrer gehört
+                $stmt = $db->prepare("SELECT id FROM topics WHERE id = ? AND teacher_id = ? AND school_id = ? AND is_active = 1");
+                $stmt->execute([$topic_id, $teacher_id, $school_id]);
+                if (!$stmt->fetch()) {
+                    throw new Exception('Thema nicht gefunden oder keine Berechtigung.');
+                }
+                
+                $db->beginTransaction();
+                
+                // Thema aktualisieren
+                $stmt = $db->prepare("UPDATE topics SET title = ?, short_description = ?, is_global = ?, updated_at = NOW() WHERE id = ? AND teacher_id = ? AND school_id = ?");
+                $stmt->execute([$title, $short_description, $is_global, $topic_id, $teacher_id, $school_id]);
+                
+                // Alte Fachzuordnungen löschen
+                $stmt = $db->prepare("DELETE FROM topic_subjects WHERE topic_id = ?");
+                $stmt->execute([$topic_id]);
+                
+                // Neue Fächer zuordnen
+                if (!empty($subject_ids) && is_array($subject_ids)) {
+                    $stmt = $db->prepare("INSERT INTO topic_subjects (topic_id, subject_id) VALUES (?, ?)");
+                    foreach ($subject_ids as $subject_id) {
+                        $stmt->execute([$topic_id, (int)$subject_id]);
+                    }
+                }
+                
+                $db->commit();
+                $_SESSION['flash_message'] = 'Thema erfolgreich aktualisiert.';
+                $_SESSION['flash_type'] = 'success';
+                break;
+                
+            case 'delete_topic':
+                $topic_id = (int)($_POST['topic_id'] ?? 0);
+                
+                if ($topic_id <= 0) {
+                    throw new Exception('Ungültige Thema-ID.');
+                }
+                
+                // Prüfen ob Thema dem Lehrer gehört
+                $stmt = $db->prepare("SELECT title FROM topics WHERE id = ? AND teacher_id = ? AND school_id = ? AND is_active = 1");
+                $stmt->execute([$topic_id, $teacher_id, $school_id]);
+                $topic = $stmt->fetch();
+                if (!$topic) {
+                    throw new Exception('Thema nicht gefunden oder keine Berechtigung.');
+                }
+                
+                // Soft delete
+                $stmt = $db->prepare("UPDATE topics SET is_active = 0, updated_at = NOW() WHERE id = ? AND teacher_id = ? AND school_id = ?");
+                $stmt->execute([$topic_id, $teacher_id, $school_id]);
+                
+                $_SESSION['flash_message'] = "Thema '{$topic['title']}' erfolgreich gelöscht.";
+                $_SESSION['flash_type'] = 'success';
+                break;
+        }
+        
+        // Redirect mit aktuellen Parametern
+        $redirect_url = $_SERVER['PHP_SELF'];
+        $params = [];
+        if (isset($_GET['filter'])) $params[] = 'filter=' . $_GET['filter'];
+        if (isset($_GET['sort'])) $params[] = 'sort=' . $_GET['sort'];
+        if (!empty($params)) $redirect_url .= '?' . implode('&', $params);
+        
+        header('Location: ' . $redirect_url);
+        exit();
+        
+    } catch (Exception $e) {
+        if (isset($db) && $db->inTransaction()) {
+            $db->rollBack();
+        }
+        $_SESSION['flash_message'] = $e->getMessage();
+        $_SESSION['flash_type'] = 'error';
+        
+        // Bei Fehler auch redirect
+        header('Location: ' . $_SERVER['PHP_SELF'] . '?' . $_SERVER['QUERY_STRING']);
+        exit();
+    }
+}
+
+// === AB HIER BEGINNT DIE HTML-AUSGABE ===
+
+// Lehrerdaten abrufen
+$stmt = $db->prepare("
+    SELECT u.*, s.name as school_name
+    FROM users u
+    JOIN schools s ON u.school_id = s.id
+    WHERE u.id = ? AND u.user_type = 'lehrer'
+");
+$stmt->execute([$teacher_id]);
+$teacher = $stmt->fetch();
+
+// Flash-Messages verarbeiten
+$flash_message = null;
+$flash_type = null;
+if (isset($_SESSION['flash_message'])) {
+    $flash_message = $_SESSION['flash_message'];
+    $flash_type = $_SESSION['flash_type'];
+    unset($_SESSION['flash_message']);
+    unset($_SESSION['flash_type']);
+}
+
+// Bearbeitungsmodus prüfen
+$edit_topic = null;
+if (isset($_GET['edit']) && is_numeric($_GET['edit'])) {
+    $edit_id = (int)$_GET['edit'];
+    $stmt = $db->prepare("
+        SELECT t.*
+        FROM topics t
+        WHERE t.id = ? AND t.teacher_id = ? AND t.school_id = ? AND t.is_active = 1
+    ");
+    $stmt->execute([$edit_id, $teacher_id, $school_id]);
+    $edit_topic = $stmt->fetch();
+    
+    if ($edit_topic) {
+        // Fächer separat laden
+        $stmt = $db->prepare("SELECT subject_id FROM topic_subjects WHERE topic_id = ?");
+        $stmt->execute([$edit_id]);
+        $edit_topic['subject_ids'] = $stmt->fetchAll(PDO::FETCH_COLUMN);
+    }
 }
 
 // Fächer abrufen
@@ -77,7 +202,7 @@ $stmt = $db->prepare("SELECT * FROM subjects WHERE school_id = ? AND is_active =
 $stmt->execute([$school_id]);
 $subjects = $stmt->fetchAll();
 
-// Filter für globale/lokale Ansicht
+// Filter und Sortierung
 $filter = $_GET['filter'] ?? 'school';
 $sort_by = $_GET['sort'] ?? 'alphabetic';
 
@@ -91,80 +216,47 @@ switch ($sort_by) {
         break;
 }
 
-// Themen abrufen basierend auf Filter
+// WICHTIG: Themen OHNE JOIN abrufen, um Duplikate zu vermeiden
 if ($filter === 'global') {
-    // Globale Ansicht: Alle globalen Themen anzeigen (auch eigene)
     $stmt = $db->prepare("
-        SELECT DISTINCT t.id, t.school_id, t.teacher_id, t.title, t.description, 
-               t.short_description, t.is_global, t.is_active, t.created_at, t.updated_at,
-               u.name as teacher_name, s.name as school_name
+        SELECT t.*, u.name as teacher_name, s.name as school_name
         FROM topics t 
         LEFT JOIN users u ON t.teacher_id = u.id
         LEFT JOIN schools s ON t.school_id = s.id
         WHERE t.is_global = 1 AND t.is_active = 1
-        GROUP BY t.id
         $order_clause
     ");
     $stmt->execute();
 } else {
-    // Lokale Ansicht: Nur eigene Themen (unabhängig ob global oder nicht)
     $stmt = $db->prepare("
-        SELECT DISTINCT t.id, t.school_id, t.teacher_id, t.title, t.description, 
-               t.short_description, t.is_global, t.is_active, t.created_at, t.updated_at,
-               u.name as teacher_name
+        SELECT t.*, u.name as teacher_name
         FROM topics t 
         LEFT JOIN users u ON t.teacher_id = u.id
         WHERE t.school_id = ? AND t.teacher_id = ? AND t.is_active = 1
-        GROUP BY t.id
         $order_clause
     ");
     $stmt->execute([$school_id, $teacher_id]);
 }
 $topics = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Duplikate entfernen (falls vorhanden)
-$uniqueTopics = [];
-$seenIds = [];
-foreach ($topics as $topic) {
-    if (!in_array($topic['id'], $seenIds)) {
-        $uniqueTopics[] = $topic;
-        $seenIds[] = $topic['id'];
-    }
-}
-$topics = $uniqueTopics;
-
-// Fächer für jedes Thema laden
-$topicIds = array_column($topics, 'id');
-if (!empty($topicIds)) {
-    $placeholders = str_repeat('?,', count($topicIds) - 1) . '?';
+// Fächer für jedes Thema SEPARAT laden (vermeidet JOIN-Duplikate)
+foreach ($topics as &$topic) {
     $stmt = $db->prepare("
-        SELECT DISTINCT ts.topic_id, s.* 
+        SELECT s.* 
         FROM subjects s 
         JOIN topic_subjects ts ON s.id = ts.subject_id 
-        WHERE ts.topic_id IN ($placeholders)
+        WHERE ts.topic_id = ?
         ORDER BY s.short_name
     ");
-    $stmt->execute($topicIds);
-    $allSubjects = $stmt->fetchAll();
-    
-    // Subjects den Topics zuordnen
-    $subjectsByTopic = [];
-    foreach ($allSubjects as $subject) {
-        $topicId = $subject['topic_id'];
-        if (!isset($subjectsByTopic[$topicId])) {
-            $subjectsByTopic[$topicId] = [];
-        }
-        $subjectsByTopic[$topicId][] = $subject;
-    }
-    
-    // Topics mit Subjects anreichern
-    foreach ($topics as &$topic) {
-        $topic['subjects'] = $subjectsByTopic[$topic['id']] ?? [];
-    }
-} else {
-    foreach ($topics as &$topic) {
-        $topic['subjects'] = [];
-    }
+    $stmt->execute([$topic['id']]);
+    $topic['subjects'] = $stmt->fetchAll();
+}
+unset($topic); // Referenz aufheben
+
+// Debug-Ausgabe (kann später entfernt werden)
+error_log("Anzahl Themen gefunden: " . count($topics));
+foreach ($topics as $t) {
+    error_log("Topic ID: {$t['id']}, Title: {$t['title']}");
 }
 ?>
 <!DOCTYPE html>
@@ -172,7 +264,7 @@ if (!empty($topicIds)) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Themen verwalten - Lehrer Dashboard</title>
+    <title>Themen verwalten - <?= htmlspecialchars($teacher['school_name']) ?></title>
     <style>
         * {
             margin: 0;
@@ -188,10 +280,68 @@ if (!empty($topicIds)) {
             min-height: 100vh;
         }
 
+        .header {
+            height: 120px;
+            background: linear-gradient(135deg, #002b45 0%, #063b52 100%);
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+        }
+
+        .header::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            height: 6px;
+            background: #ff9900;
+        }
+
+        .header-content {
+            text-align: center;
+            z-index: 2;
+        }
+
+        .header h1 {
+            color: white;
+            font-size: 28px;
+            font-weight: 600;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .header-info {
+            color: rgba(255,255,255,0.9);
+            margin-top: 5px;
+            font-size: 14px;
+        }
+
+        .back-btn {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            padding: 8px 16px;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 999px;
+            text-decoration: none;
+            font-size: 13px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+        }
+
+        .back-btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: translateY(-1px);
+        }
+
         .container {
             max-width: 1400px;
             margin: 0 auto;
-            padding: 20px 40px 40px;
+            padding: 30px 40px 40px;
         }
 
         .controls {
@@ -243,12 +393,6 @@ if (!empty($topicIds)) {
             background: rgba(0, 43, 69, 0.1);
         }
 
-        .toggle-btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-
-        /* View Toggle für Listen-/Kachelansicht */
         .view-toggle {
             display: flex;
             background: rgba(255, 153, 0, 0.1);
@@ -343,7 +487,6 @@ if (!empty($topicIds)) {
             font-size: 12px;
         }
 
-        /* Kachel-Ansicht (Standard) */
         .topics-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
@@ -351,7 +494,6 @@ if (!empty($topicIds)) {
             margin-top: 30px;
         }
 
-        /* Listen-Ansicht */
         .topics-list {
             display: flex;
             flex-direction: column;
@@ -380,12 +522,6 @@ if (!empty($topicIds)) {
         .topics-list .topic-title {
             font-size: 18px;
             margin-bottom: 5px;
-        }
-
-        .topics-list .topic-description {
-            font-size: 14px;
-            max-width: 400px;
-            margin-bottom: 8px;
         }
 
         .topics-list .topic-subjects {
@@ -446,12 +582,6 @@ if (!empty($topicIds)) {
             font-size: 11px;
             font-weight: 600;
             margin-left: 8px;
-        }
-
-        .topic-description {
-            color: #555;
-            line-height: 1.6;
-            margin-bottom: 15px;
         }
 
         .topic-short-description {
@@ -676,6 +806,18 @@ if (!empty($topicIds)) {
             border-radius: 10px;
             margin-bottom: 20px;
             font-weight: 600;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateY(-20px);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
         }
 
         .flash-success {
@@ -688,6 +830,26 @@ if (!empty($topicIds)) {
             background: rgba(231, 76, 60, 0.1);
             border: 2px solid rgba(231, 76, 60, 0.3);
             color: #dc2626;
+        }
+
+        .subject-hint {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+            font-style: italic;
+        }
+
+        .debug-info {
+            position: fixed;
+            bottom: 10px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 11px;
+            font-family: monospace;
+            max-width: 300px;
         }
 
         @media (max-width: 768px) {
@@ -733,14 +895,31 @@ if (!empty($topicIds)) {
     </style>
 </head>
 <body>
+    <div class="header">
+        <a href="dashboard.php" class="back-btn">← Zurück zum Dashboard</a>
+        <div class="header-content">
+            <h1>Themen verwalten</h1>
+            <div class="header-info">
+                <?= htmlspecialchars($teacher['school_name']) ?> • <?= htmlspecialchars($teacher['name']) ?>
+            </div>
+        </div>
+    </div>
+
     <div class="container">
-        <div id="flash-messages"></div>
+        <!-- Flash Messages -->
+        <div id="flash-messages">
+            <?php if ($flash_message): ?>
+                <div class="flash-message flash-<?= htmlspecialchars($flash_type) ?>">
+                    <?= htmlspecialchars($flash_message) ?>
+                </div>
+            <?php endif; ?>
+        </div>
 
         <div class="controls">
             <div class="filter-controls">
                 <div class="toggle-group">
-                    <button class="toggle-btn <?= $filter === 'school' ? 'active' : '' ?>" data-filter="school" onclick="changeFilter('school')">🏫 Schule</button>
-                    <button class="toggle-btn <?= $filter === 'global' ? 'active' : '' ?>" data-filter="global" onclick="changeFilter('global')">🌍 Global</button>
+                    <button class="toggle-btn <?= $filter === 'school' ? 'active' : '' ?>" onclick="changeFilter('school')">🏫 Schule</button>
+                    <button class="toggle-btn <?= $filter === 'global' ? 'active' : '' ?>" onclick="changeFilter('global')">🌍 Global</button>
                 </div>
 
                 <div class="view-toggle">
@@ -748,7 +927,7 @@ if (!empty($topicIds)) {
                     <button class="view-btn active" data-view="grid">🎯 Kacheln</button>
                 </div>
 
-                <select class="select-control" id="sortSelect">
+                <select class="select-control" id="sortSelect" onchange="changeSort(this.value)">
                     <option value="alphabetic" <?= $sort_by === 'alphabetic' ? 'selected' : '' ?>>Alphabetisch</option>
                     <option value="date" <?= $sort_by === 'date' ? 'selected' : '' ?>>Nach Erstelldatum</option>
                     <option value="updated" <?= $sort_by === 'updated' ? 'selected' : '' ?>>Zuletzt geändert</option>
@@ -788,15 +967,16 @@ if (!empty($topicIds)) {
                                             <?php endif; ?>
                                         </div>
                                         <div class="topic-meta">
+                                            ID: <?= $topic['id'] ?> | 
                                             <?php if ($filter === 'global' && isset($topic['school_name'])): ?>
                                                 🏫 <?= htmlspecialchars($topic['school_name']) ?><br>
                                             <?php endif; ?>
                                             <?php if ($filter === 'global' && $topic['teacher_id'] != $teacher_id): ?>
                                                 👤 <?= htmlspecialchars($topic['teacher_name']) ?><br>
                                             <?php endif; ?>
-                                            Erstellt: <?= date('d.m.Y', strtotime($topic['created_at'])) ?>
+                                            Erstellt: <?= date('d.m.Y H:i', strtotime($topic['created_at'])) ?>
                                             <?php if ($topic['updated_at'] !== $topic['created_at']): ?>
-                                                | Geändert: <?= date('d.m.Y', strtotime($topic['updated_at'])) ?>
+                                                | Geändert: <?= date('d.m.Y H:i', strtotime($topic['updated_at'])) ?>
                                             <?php endif; ?>
                                         </div>
                                     </div>
@@ -809,27 +989,32 @@ if (!empty($topicIds)) {
                                 <?php endif; ?>
 
                                 <div class="topic-subjects">
-                                    <?php foreach ($topic['subjects'] as $subject): ?>
-                                        <span class="subject-tag" style="background-color: <?= htmlspecialchars($subject['color']) ?>">
-                                            <?= htmlspecialchars($subject['short_name']) ?>
-                                        </span>
-                                    <?php endforeach; ?>
+                                    <?php if (!empty($topic['subjects'])): ?>
+                                        <?php foreach ($topic['subjects'] as $subject): ?>
+                                            <span class="subject-tag" style="background-color: <?= htmlspecialchars($subject['color']) ?>">
+                                                <?= htmlspecialchars($subject['short_name']) ?>
+                                            </span>
+                                        <?php endforeach; ?>
+                                    <?php else: ?>
+                                        <span style="color: #999; font-size: 12px;">Keine Fächer zugeordnet</span>
+                                    <?php endif; ?>
                                 </div>
                             </div>
                         </div>
 
-                        <?php 
-                        // Aktions-Buttons nur für eigene Themen anzeigen
-                        $isOwnTopic = ($topic['teacher_id'] == $teacher_id);
-                        if ($isOwnTopic): 
-                        ?>
+                        <?php if ($topic['teacher_id'] == $teacher_id): ?>
                             <div class="topic-actions">
-                                <button class="btn btn-secondary btn-sm" onclick="editTopic(<?= $topic['id'] ?>)">
+                                <a href="?edit=<?= $topic['id'] ?>&filter=<?= $filter ?>&sort=<?= $sort_by ?>" class="btn btn-secondary btn-sm">
                                     ✏️ Bearbeiten
-                                </button>
-                                <button class="btn btn-danger btn-sm" onclick="deleteTopic(<?= $topic['id'] ?>)">
-                                    🗑️ Löschen
-                                </button>
+                                </a>
+                                <form method="POST" style="display: inline;" onsubmit="return confirm('Sind Sie sicher, dass Sie dieses Thema löschen möchten?');">
+                                    <input type="hidden" name="form_action" value="delete_topic">
+                                    <input type="hidden" name="topic_id" value="<?= $topic['id'] ?>">
+                                    <input type="hidden" name="csrf_token" value="<?= $_SESSION['csrf_token'] ?>">
+                                    <button type="submit" class="btn btn-danger btn-sm">
+                                        🗑️ Löschen
+                                    </button>
+                                </form>
                             </div>
                         <?php endif; ?>
                     </div>
@@ -838,406 +1023,200 @@ if (!empty($topicIds)) {
         </div>
     </div>
 
+    <!-- Debug-Info (kann später entfernt werden) -->
+    <div class="debug-info">
+        Anzahl Themen: <?= count($topics) ?><br>
+        Filter: <?= $filter ?><br>
+        Sort: <?= $sort_by ?><br>
+        Teacher ID: <?= $teacher_id ?><br>
+        School ID: <?= $school_id ?>
+    </div>
+
     <!-- Modal für Thema erstellen/bearbeiten -->
-    <div class="modal" id="topicModal">
+    <div class="modal <?= $edit_topic ? 'show' : '' ?>" id="topicModal">
         <div class="modal-content">
             <div class="modal-header">
-                <h2 class="modal-title" id="modalTitle">Neues Thema</h2>
-                <button class="close-modal" onclick="closeModal()">&times;</button>
+                <h2 class="modal-title" id="modalTitle"><?= $edit_topic ? 'Thema bearbeiten' : 'Neues Thema' ?></h2>
+                <button type="button" class="close-modal" onclick="closeModal()">&times;</button>
             </div>
 
-            <form id="topicForm">
-                <input type="hidden" id="topicId" name="topic_id">
+            <form id="topicForm" method="POST" action="<?= $_SERVER['PHP_SELF'] ?>?<?= $_SERVER['QUERY_STRING'] ?>" autocomplete="off">
+                <input type="hidden" name="form_action" value="<?= $edit_topic ? 'update_topic' : 'create_topic' ?>">
+                <?php if ($edit_topic): ?>
+                    <input type="hidden" name="topic_id" value="<?= $edit_topic['id'] ?>">
+                <?php endif; ?>
                 <input type="hidden" name="csrf_token" value="<?= $_SESSION['csrf_token'] ?>">
 
                 <div class="form-group">
                     <label class="form-label" for="topicTitle">Titel *</label>
-                    <input type="text" class="form-control" id="topicTitle" name="title" required maxlength="255">
+                    <input type="text" class="form-control" id="topicTitle" name="title" required maxlength="255" autocomplete="off" value="<?= $edit_topic ? htmlspecialchars($edit_topic['title']) : '' ?>">
                 </div>
 
                 <div class="form-group">
                     <label class="form-label" for="shortDescription">Kurzbeschreibung (240 Zeichen)</label>
-                    <textarea class="form-control" id="shortDescription" name="short_description" maxlength="240" rows="4" oninput="updateCharCounter()"></textarea>
+                    <textarea class="form-control" id="shortDescription" name="short_description" maxlength="240" rows="4" oninput="updateCharCounter()" autocomplete="off"><?= $edit_topic ? htmlspecialchars($edit_topic['short_description']) : '' ?></textarea>
                     <div id="charCounter" class="char-counter">0 / 240</div>
                 </div>
 
                 <div class="form-group">
-                    <label class="form-label">Fächer auswählen *</label>
+                    <label class="form-label">Fächer auswählen (optional)</label>
                     <div class="subjects-grid" id="subjectsGrid">
                         <?php foreach ($subjects as $subject): ?>
-                            <label class="subject-checkbox">
-                                <input type="checkbox" name="subjects[]" value="<?= $subject['id'] ?>">
+                            <label class="subject-checkbox <?= ($edit_topic && in_array($subject['id'], $edit_topic['subject_ids'])) ? 'checked' : '' ?>">
+                                <input type="checkbox" name="subjects[]" value="<?= $subject['id'] ?>" <?= ($edit_topic && in_array($subject['id'], $edit_topic['subject_ids'])) ? 'checked' : '' ?>>
                                 <span style="color: <?= htmlspecialchars($subject['color']) ?>">
                                     <?= htmlspecialchars($subject['short_name']) ?>
                                 </span>
                             </label>
                         <?php endforeach; ?>
                     </div>
+                    <div class="subject-hint">Sie können später jederzeit Fächer hinzufügen oder entfernen</div>
                 </div>
 
                 <div class="form-group">
                     <div class="checkbox-group">
-                        <input type="checkbox" id="isGlobal" name="is_global" value="1">
+                        <input type="checkbox" id="isGlobal" name="is_global" value="1" <?= ($edit_topic && $edit_topic['is_global']) ? 'checked' : '' ?>>
                         <label for="isGlobal">🌍 Thema global für andere Schulen sichtbar machen</label>
                     </div>
                     <small style="color: #666; margin-top: 5px; display: block; font-size: 12px;">
-                        Globale Themen können von anderen Schulen eingesehen werden (ohne Zugriff auf Ihre Fächer)
+                        Globale Themen können von anderen Schulen eingesehen werden
                     </small>
                 </div>
 
                 <div class="modal-actions">
                     <button type="button" class="btn btn-secondary" onclick="closeModal()">Abbrechen</button>
-                    <button type="submit" class="btn btn-primary" id="submitBtn">Speichern</button>
+                    <button type="submit" class="btn btn-primary" id="submitBtn"><?= $edit_topic ? 'Aktualisieren' : 'Speichern' ?></button>
                 </div>
             </form>
         </div>
     </div>
 
     <script>
-        (function() {
-            'use strict';
+        // Einfaches JavaScript nur für UI-Interaktionen
+        let currentView = 'grid';
+        
+        function openCreateModal() {
+            // Form reset
+            document.getElementById('topicForm').reset();
+            document.querySelectorAll('.subject-checkbox').forEach(label => {
+                label.classList.remove('checked');
+                const checkbox = label.querySelector('input');
+                if (checkbox) checkbox.checked = false;
+            });
             
-            // Globale Variablen für diesen Scope
-            let isEditing = false;
-            let currentView = 'grid';
+            // Modal zeigen
+            document.getElementById('modalTitle').textContent = 'Neues Thema';
+            document.getElementById('topicModal').classList.add('show');
+            updateCharCounter();
             
-            // AJAX URL definieren - abhängig vom Kontext
-            function getAjaxUrl() {
-                const path = window.location.pathname;
-                if (path.includes('dashboard.php')) {
-                    return 'dashboard.php';
-                }
-                return window.location.pathname;
-            }
-            
-            // Funktionen im globalen Scope verfügbar machen
-            window.switchView = function(view) {
-                currentView = view;
-                document.querySelectorAll('.view-btn').forEach(btn => {
-                    btn.classList.toggle('active', btn.dataset.view === view);
-                });
-                const container = document.getElementById('topicsContainer');
-                container.className = view === 'list' ? 'topics-list' : 'topics-grid';
-            }
-            
-            window.changeFilter = function(filter) {
-                const searchParams = new URLSearchParams(window.location.search);
-                searchParams.set('filter', filter);
-                if (window.location.pathname.includes('dashboard.php')) {
-                    searchParams.set('page', 'themen');
-                }
-                window.location.href = window.location.pathname + '?' + searchParams.toString();
-            }
-            
-            window.updateCharCounter = function() {
-                const textarea = document.getElementById('shortDescription');
-                const counter = document.getElementById('charCounter');
-                if (textarea && counter) {
-                    const length = textarea.value.length;
-                    counter.textContent = length + ' / 240';
-                    counter.className = 'char-counter';
-                    if (length > 200) counter.classList.add('warning');
-                    if (length > 240) counter.classList.add('error');
-                }
-            }
-            
-            window.openCreateModal = function() {
-                console.log('Opening CREATE modal');
-                document.getElementById('modalTitle').textContent = 'Neues Thema';
-                
-                // Form komplett zurücksetzen
-                const form = document.getElementById('topicForm');
-                form.reset();
-                
-                // Explizit alle Felder leeren
-                document.getElementById('topicId').value = '';
-                document.getElementById('topicTitle').value = '';
-                document.getElementById('shortDescription').value = '';
-                document.getElementById('isGlobal').checked = false;
-                document.getElementById('submitBtn').textContent = 'Erstellen';
-                
-                // Status auf CREATE setzen
-                isEditing = false;
-                
-                // Alle Subject-Checkboxes deaktivieren
-                document.querySelectorAll('.subject-checkbox').forEach(label => {
-                    label.classList.remove('checked');
-                    const checkbox = label.querySelector('input');
-                    checkbox.checked = false;
-                });
-                
-                updateCharCounter();
-                document.getElementById('topicModal').classList.add('show');
-                
-                console.log('CREATE modal opened - isEditing:', isEditing, 'topicId:', document.getElementById('topicId').value);
-            }
-            
-            window.closeModal = function() {
-                console.log('Closing modal - resetting state');
+            setTimeout(() => {
+                document.getElementById('topicTitle').focus();
+            }, 100);
+        }
+        
+        function closeModal() {
+            <?php if ($edit_topic): ?>
+                // Bei Bearbeitung: zurück zur Liste
+                window.location.href = '<?= $_SERVER['PHP_SELF'] ?>?filter=<?= $filter ?>&sort=<?= $sort_by ?>';
+            <?php else: ?>
                 document.getElementById('topicModal').classList.remove('show');
-                
-                // Status komplett zurücksetzen
-                isEditing = false;
-                document.getElementById('topicId').value = '';
-                
-                console.log('Modal closed - isEditing reset to:', isEditing);
+            <?php endif; ?>
+        }
+        
+        function updateCharCounter() {
+            const textarea = document.getElementById('shortDescription');
+            const counter = document.getElementById('charCounter');
+            if (textarea && counter) {
+                const length = textarea.value.length;
+                counter.textContent = length + ' / 240';
+                counter.className = 'char-counter';
+                if (length > 200) counter.classList.add('warning');
+                if (length > 240) counter.classList.add('error');
             }
+        }
+        
+        function switchView(view) {
+            currentView = view;
+            document.querySelectorAll('.view-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.view === view);
+            });
+            const container = document.getElementById('topicsContainer');
+            container.className = view === 'list' ? 'topics-list' : 'topics-grid';
+        }
+        
+        function changeFilter(filter) {
+            const searchParams = new URLSearchParams(window.location.search);
+            searchParams.set('filter', filter);
+            window.location.href = window.location.pathname + '?' + searchParams.toString();
+        }
+        
+        function changeSort(sort) {
+            const searchParams = new URLSearchParams(window.location.search);
+            searchParams.set('sort', sort);
+            window.location.href = window.location.pathname + '?' + searchParams.toString();
+        }
+        
+        // DOM Ready
+        document.addEventListener('DOMContentLoaded', function() {
+            // Flash Messages automatisch ausblenden
+            setTimeout(() => {
+                document.querySelectorAll('.flash-message').forEach(msg => {
+                    msg.style.transition = 'opacity 0.3s';
+                    msg.style.opacity = '0';
+                    setTimeout(() => msg.remove(), 300);
+                });
+            }, 5000);
             
-            window.showFlashMessage = function(message, type) {
-                const flashContainer = document.getElementById('flash-messages');
-                const flash = document.createElement('div');
-                flash.className = 'flash-message flash-' + type;
-                flash.textContent = message;
-                flashContainer.appendChild(flash);
-                setTimeout(() => { flash.remove(); }, 5000);
-            }
+            // View Toggle Handler
+            document.querySelectorAll('.view-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    switchView(this.dataset.view);
+                });
+            });
             
-            window.editTopic = async function(topicId) {
-                const url = getAjaxUrl();
-                console.log('Opening EDIT modal for topic:', topicId, '- URL:', url);
+            // Subject Checkbox Handler
+            document.querySelectorAll('.subject-checkbox').forEach(label => {
+                const checkbox = label.querySelector('input');
+                if (!checkbox) return;
                 
-                document.getElementById('modalTitle').textContent = 'Thema bearbeiten';
-                document.getElementById('submitBtn').textContent = 'Aktualisieren';
-                
-                // Status auf EDIT setzen
-                isEditing = true;
-                
-                try {
-                    const formData = new FormData();
-                    formData.append('action', 'get_topic');
-                    formData.append('topic_id', topicId);
-                    formData.append('csrf_token', '<?= $_SESSION['csrf_token'] ?>');
-
-                    const response = await fetch(url, {
-                        method: 'POST',
-                        body: formData
-                    });
-
-                    if (!response.ok) throw new Error('Server-Fehler: ' + response.status);
-
-                    const result = await response.json();
-                    
-                    if (result.success) {
-                        const topic = result.topic;
-                        
-                        // Explizit alle Werte setzen
-                        document.getElementById('topicId').value = topic.id;
-                        document.getElementById('topicTitle').value = topic.title;
-                        document.getElementById('shortDescription').value = topic.short_description || '';
-                        document.getElementById('isGlobal').checked = topic.is_global == 1;
-                        
-                        // Subject-Checkboxes setzen
-                        document.querySelectorAll('.subject-checkbox').forEach(label => {
-                            label.classList.remove('checked');
-                            const checkbox = label.querySelector('input');
-                            const isChecked = topic.subject_ids.includes(parseInt(checkbox.value));
-                            checkbox.checked = isChecked;
-                            if (isChecked) label.classList.add('checked');
-                        });
-                        
-                        updateCharCounter();
-                        document.getElementById('topicModal').classList.add('show');
-                        
-                        console.log('EDIT modal opened - isEditing:', isEditing, 'topicId:', document.getElementById('topicId').value);
-                    } else {
-                        showFlashMessage(result.message, 'error');
-                    }
-                } catch (error) {
-                    showFlashMessage('Fehler: ' + error.message, 'error');
-                    console.error('Edit error:', error);
-                }
-            }
-            
-            window.deleteTopic = async function(topicId) {
-                const url = getAjaxUrl();
-                console.log('Delete topic - URL:', url);
-                
-                if (!confirm('Sind Sie sicher, dass Sie dieses Thema löschen möchten?')) return;
-
-                try {
-                    const formData = new FormData();
-                    formData.append('action', 'delete_topic');
-                    formData.append('topic_id', topicId);
-                    formData.append('csrf_token', '<?= $_SESSION['csrf_token'] ?>');
-
-                    const response = await fetch(url, {
-                        method: 'POST',
-                        body: formData
-                    });
-
-                    if (!response.ok) throw new Error('Server-Fehler: ' + response.status);
-
-                    const result = await response.json();
-                    
-                    if (result.success) {
-                        showFlashMessage(result.message, 'success');
-                        document.querySelector('[data-topic-id="' + topicId + '"]').remove();
-                        
-                        if (document.querySelectorAll('.topic-card').length === 0) {
-                            setTimeout(() => { window.location.reload(); }, 1000);
-                        }
-                    } else {
-                        showFlashMessage(result.message, 'error');
-                    }
-                } catch (error) {
-                    showFlashMessage('Fehler: ' + error.message, 'error');
-                    console.error('Delete error:', error);
-                }
-            }
-            
-            // Event Listener nach DOM-Laden
-            document.addEventListener('DOMContentLoaded', function() {
-                // Form Submit Handler
-                const form = document.getElementById('topicForm');
-                if (form) {
-                    form.addEventListener('submit', async function(e) {
+                label.addEventListener('click', function(e) {
+                    if (e.target.tagName !== 'INPUT') {
                         e.preventDefault();
-                        
-                        const url = getAjaxUrl();
-                        const submitBtn = document.getElementById('submitBtn');
-                        const originalText = submitBtn.textContent;
-                        
-                        // Status vor Submit prüfen
-                        const topicIdValue = document.getElementById('topicId').value.trim();
-                        const topicIdNum = parseInt(topicIdValue) || 0;
-                        
-                        console.log('=== FORM SUBMIT ===');
-                        console.log('isEditing:', isEditing);
-                        console.log('topicIdValue:', topicIdValue);
-                        console.log('topicIdNum:', topicIdNum);
-                        console.log('URL:', url);
-                        
-                        // Sehr strenge Logik für Action-Bestimmung
-                        let action;
-                        if (isEditing === true && topicIdNum > 0) {
-                            action = 'update_topic';
-                            console.log('→ ACTION: UPDATE (isEditing=true AND topicId>0)');
-                        } else {
-                            action = 'create_topic';
-                            console.log('→ ACTION: CREATE (isEditing=false OR topicId<=0)');
-                        }
-                        
-                        submitBtn.textContent = action === 'create_topic' ? 'Erstellen...' : 'Aktualisieren...';
-                        submitBtn.disabled = true;
-
-                        try {
-                            const formData = new FormData(this);
-                            
-                            // Action setzen
-                            formData.append('action', action);
-                            
-                            // Für CREATE: topic_id explizit entfernen
-                            if (action === 'create_topic') {
-                                formData.delete('topic_id');
-                                console.log('CREATE: topic_id removed from FormData');
-                            } else {
-                                // Für UPDATE: topic_id validieren
-                                if (topicIdNum <= 0) {
-                                    throw new Error('Update ohne gültige Topic-ID nicht möglich');
-                                }
-                                formData.set('topic_id', topicIdNum.toString());
-                                console.log('UPDATE: topic_id set to', topicIdNum);
-                            }
-                            
-                            const selectedSubjects = [];
-                            document.querySelectorAll('.subject-checkbox input:checked').forEach(input => {
-                                selectedSubjects.push(input.value);
-                            });
-                            
-                            console.log('Selected subjects:', selectedSubjects);
-                            
-                            if (selectedSubjects.length === 0) {
-                                showFlashMessage('Bitte wählen Sie mindestens ein Fach aus.', 'error');
-                                submitBtn.textContent = originalText;
-                                submitBtn.disabled = false;
-                                return;
-                            }
-                            
-                            formData.append('subject_ids', JSON.stringify(selectedSubjects));
-                            formData.set('is_global', document.getElementById('isGlobal').checked ? '1' : '0');
-
-                            // Debug: FormData ausgeben
-                            console.log('=== FormData being sent ===');
-                            for (let [key, value] of formData.entries()) {
-                                console.log(key + ': ' + value);
-                            }
-
-                            const response = await fetch(url, {
-                                method: 'POST',
-                                body: formData
-                            });
-
-                            if (!response.ok) throw new Error('Server-Fehler: ' + response.status);
-
-                            const result = await response.json();
-                            console.log('Server response:', result);
-                            
-                            if (result.success) {
-                                showFlashMessage(result.message, 'success');
-                                closeModal();
-                                setTimeout(() => { window.location.reload(); }, 1000);
-                            } else {
-                                showFlashMessage(result.message, 'error');
-                            }
-                        } catch (error) {
-                            showFlashMessage('Fehler: ' + error.message, 'error');
-                            console.error('Submit error:', error);
-                        } finally {
-                            submitBtn.textContent = originalText;
-                            submitBtn.disabled = false;
-                        }
-                    });
+                        checkbox.checked = !checkbox.checked;
+                        this.classList.toggle('checked', checkbox.checked);
+                    }
+                });
+                
+                checkbox.addEventListener('change', function() {
+                    label.classList.toggle('checked', this.checked);
+                });
+            });
+            
+            // Modal Click-Outside Handler
+            document.getElementById('topicModal').addEventListener('click', function(e) {
+                if (e.target === this) {
+                    closeModal();
                 }
-
-                // View Toggle Handler
-                document.querySelectorAll('.view-btn').forEach(btn => {
-                    btn.addEventListener('click', function() {
-                        switchView(this.dataset.view);
-                    });
-                });
-
-                // Checkbox Handler
-                document.querySelectorAll('.subject-checkbox').forEach(label => {
-                    const checkbox = label.querySelector('input');
-                    
-                    label.addEventListener('click', function(e) {
-                        if (e.target.tagName !== 'INPUT') {
-                            e.preventDefault();
-                            checkbox.checked = !checkbox.checked;
-                            this.classList.toggle('checked', checkbox.checked);
-                        }
-                    });
-                    
-                    checkbox.addEventListener('change', function() {
-                        label.classList.toggle('checked', this.checked);
-                    });
-                });
-
-                // Sort Handler
-                const sortSelect = document.getElementById('sortSelect');
-                if (sortSelect) {
-                    sortSelect.addEventListener('change', function() {
-                        const searchParams = new URLSearchParams(window.location.search);
-                        searchParams.set('sort', this.value);
-                        window.location.href = window.location.pathname + '?' + searchParams.toString();
-                    });
-                }
-
-                // Modal Handler
-                document.getElementById('topicModal').addEventListener('click', function(e) {
-                    if (e.target === this) closeModal();
-                });
-
-                document.addEventListener('keydown', function(e) {
-                    if (e.key === 'Escape' && document.getElementById('topicModal').classList.contains('show')) {
+            });
+            
+            // ESC Key Handler
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape') {
+                    const modal = document.getElementById('topicModal');
+                    if (modal && modal.classList.contains('show')) {
                         closeModal();
                     }
-                });
-
-                updateCharCounter();
-                console.log('Themen-Modul geladen und bereit!');
+                }
             });
-        })();
+            
+            // Initial Character Counter
+            updateCharCounter();
+            
+            // Wenn im Edit-Modus, Modal öffnen lassen
+            <?php if ($edit_topic): ?>
+                updateCharCounter();
+            <?php endif; ?>
+        });
     </script>
 </body>
 </html>

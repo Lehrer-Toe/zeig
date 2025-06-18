@@ -20,32 +20,23 @@ if (!isset($_SESSION['csrf_token'])) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 }
 
-// AJAX Requests verarbeiten (für Themen-Modul)
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
-    header('Content-Type: application/json; charset=utf-8');
-    $response = ['success' => false, 'message' => ''];
+// === THEMEN-FORMULARVERARBEITUNG (VOR HTML-AUSGABE!) ===
+if ($page === 'themen' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form_action'])) {
+    $db = getDB();
+    $school_id = $_SESSION['school_id'];
     
     try {
-        $db = getDB();
-        $school_id = $_SESSION['school_id'];
-        
         // CSRF-Token prüfen
-        if (!isset($_POST['csrf_token']) || !isset($_SESSION['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
+        if (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
             throw new Exception('Ungültiger CSRF-Token');
         }
         
-        switch ($_POST['action']) {
+        switch ($_POST['form_action']) {
             case 'create_topic':
-                // Sicherstellen, dass keine topic_id für create_topic gesendet wird
-                $topic_id_check = (int)($_POST['topic_id'] ?? 0);
-                if ($topic_id_check > 0) {
-                    throw new Exception('Fehler: Topic-ID darf bei Erstellung nicht gesetzt sein.');
-                }
-                
                 $title = trim($_POST['title'] ?? '');
                 $short_description = trim($_POST['short_description'] ?? '');
-                $is_global = (int)($_POST['is_global'] ?? 0);
-                $subject_ids = json_decode($_POST['subject_ids'] ?? '[]', true);
+                $is_global = isset($_POST['is_global']) ? 1 : 0;
+                $subject_ids = $_POST['subjects'] ?? [];
                 
                 if (empty($title)) {
                     throw new Exception('Titel ist erforderlich.');
@@ -55,90 +46,76 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     throw new Exception('Kurzbeschreibung darf maximal 240 Zeichen haben.');
                 }
                 
-                if (empty($subject_ids) || !is_array($subject_ids)) {
-                    throw new Exception('Mindestens ein Fach muss ausgewählt werden.');
-                }
-                
                 $db->beginTransaction();
                 
-                // Thema erstellen (description als leerer String)
+                // Thema erstellen
                 $stmt = $db->prepare("INSERT INTO topics (school_id, teacher_id, title, description, short_description, is_global, created_at, updated_at) VALUES (?, ?, ?, '', ?, ?, NOW(), NOW())");
                 $stmt->execute([$school_id, $teacher_id, $title, $short_description, $is_global]);
                 $new_topic_id = $db->lastInsertId();
                 
                 // Fächer zuordnen
-                $stmt = $db->prepare("INSERT INTO topic_subjects (topic_id, subject_id) VALUES (?, ?)");
-                foreach ($subject_ids as $subject_id) {
-                    $stmt->execute([$new_topic_id, (int)$subject_id]);
+                if (!empty($subject_ids) && is_array($subject_ids)) {
+                    $stmt = $db->prepare("INSERT INTO topic_subjects (topic_id, subject_id) VALUES (?, ?)");
+                    foreach ($subject_ids as $subject_id) {
+                        $stmt->execute([$new_topic_id, (int)$subject_id]);
+                    }
                 }
                 
                 $db->commit();
-                $response['success'] = true;
-                $response['message'] = 'Thema erfolgreich erstellt.';
-                $response['topic_id'] = $new_topic_id; // Neue ID zurückgeben für Debug
+                $_SESSION['flash_message'] = 'Thema erfolgreich erstellt.';
+                $_SESSION['flash_type'] = 'success';
                 break;
                 
             case 'update_topic':
                 $topic_id = (int)($_POST['topic_id'] ?? 0);
                 $title = trim($_POST['title'] ?? '');
                 $short_description = trim($_POST['short_description'] ?? '');
-                $is_global = (int)($_POST['is_global'] ?? 0);
-                $subject_ids = json_decode($_POST['subject_ids'] ?? '[]', true);
+                $is_global = isset($_POST['is_global']) ? 1 : 0;
+                $subject_ids = $_POST['subjects'] ?? [];
                 
                 if ($topic_id <= 0) {
-                    throw new Exception('Thema-ID ist für Update erforderlich und muss größer als 0 sein.');
+                    throw new Exception('Ungültige Thema-ID.');
                 }
                 
                 if (empty($title)) {
                     throw new Exception('Titel ist erforderlich.');
                 }
                 
-                if (mb_strlen($short_description) > 240) {
-                    throw new Exception('Kurzbeschreibung darf maximal 240 Zeichen haben.');
-                }
-                
-                if (empty($subject_ids) || !is_array($subject_ids)) {
-                    throw new Exception('Mindestens ein Fach muss ausgewählt werden.');
-                }
-                
                 // Prüfen ob Thema dem Lehrer gehört
-                $stmt = $db->prepare("SELECT id, title FROM topics WHERE id = ? AND teacher_id = ? AND school_id = ? AND is_active = 1");
+                $stmt = $db->prepare("SELECT id FROM topics WHERE id = ? AND teacher_id = ? AND school_id = ? AND is_active = 1");
                 $stmt->execute([$topic_id, $teacher_id, $school_id]);
-                $existing_topic = $stmt->fetch();
-                if (!$existing_topic) {
+                if (!$stmt->fetch()) {
                     throw new Exception('Thema nicht gefunden oder keine Berechtigung.');
                 }
                 
                 $db->beginTransaction();
                 
-                // Thema aktualisieren (description nicht ändern)
+                // Thema aktualisieren
                 $stmt = $db->prepare("UPDATE topics SET title = ?, short_description = ?, is_global = ?, updated_at = NOW() WHERE id = ? AND teacher_id = ? AND school_id = ?");
-                $affected = $stmt->execute([$title, $short_description, $is_global, $topic_id, $teacher_id, $school_id]);
-                
-                if ($stmt->rowCount() === 0) {
-                    throw new Exception('Thema konnte nicht aktualisiert werden.');
-                }
+                $stmt->execute([$title, $short_description, $is_global, $topic_id, $teacher_id, $school_id]);
                 
                 // Alte Fachzuordnungen löschen
                 $stmt = $db->prepare("DELETE FROM topic_subjects WHERE topic_id = ?");
                 $stmt->execute([$topic_id]);
                 
                 // Neue Fächer zuordnen
-                $stmt = $db->prepare("INSERT INTO topic_subjects (topic_id, subject_id) VALUES (?, ?)");
-                foreach ($subject_ids as $subject_id) {
-                    $stmt->execute([$topic_id, (int)$subject_id]);
+                if (!empty($subject_ids) && is_array($subject_ids)) {
+                    $stmt = $db->prepare("INSERT INTO topic_subjects (topic_id, subject_id) VALUES (?, ?)");
+                    foreach ($subject_ids as $subject_id) {
+                        $stmt->execute([$topic_id, (int)$subject_id]);
+                    }
                 }
                 
                 $db->commit();
-                $response['success'] = true;
-                $response['message'] = 'Thema "' . $existing_topic['title'] . '" erfolgreich aktualisiert.';
+                $_SESSION['flash_message'] = 'Thema erfolgreich aktualisiert.';
+                $_SESSION['flash_type'] = 'success';
                 break;
                 
             case 'delete_topic':
                 $topic_id = (int)($_POST['topic_id'] ?? 0);
                 
                 if ($topic_id <= 0) {
-                    throw new Exception('Thema-ID ist für Löschvorgang erforderlich und muss größer als 0 sein.');
+                    throw new Exception('Ungültige Thema-ID.');
                 }
                 
                 // Prüfen ob Thema dem Lehrer gehört
@@ -149,57 +126,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     throw new Exception('Thema nicht gefunden oder keine Berechtigung.');
                 }
                 
-                // Soft delete verwenden
+                // Soft delete
                 $stmt = $db->prepare("UPDATE topics SET is_active = 0, updated_at = NOW() WHERE id = ? AND teacher_id = ? AND school_id = ?");
-                $result = $stmt->execute([$topic_id, $teacher_id, $school_id]);
-                
-                if ($stmt->rowCount() === 0) {
-                    throw new Exception('Thema konnte nicht gelöscht werden.');
-                }
-                
-                $response['success'] = true;
-                $response['message'] = "Thema '{$topic['title']}' erfolgreich gelöscht.";
-                break;
-                
-            case 'get_topic':
-                $topic_id = (int)($_POST['topic_id'] ?? 0);
-                
-                if ($topic_id <= 0) {
-                    throw new Exception('Thema-ID ist erforderlich und muss größer als 0 sein.');
-                }
-                
-                $stmt = $db->prepare("
-                    SELECT t.*, GROUP_CONCAT(ts.subject_id) as subject_ids
-                    FROM topics t
-                    LEFT JOIN topic_subjects ts ON t.id = ts.topic_id
-                    WHERE t.id = ? AND t.teacher_id = ? AND t.school_id = ? AND t.is_active = 1
-                    GROUP BY t.id
-                ");
                 $stmt->execute([$topic_id, $teacher_id, $school_id]);
-                $topic = $stmt->fetch();
                 
-                if (!$topic) {
-                    throw new Exception('Thema nicht gefunden oder keine Berechtigung.');
-                }
-                
-                $topic['subject_ids'] = $topic['subject_ids'] ? array_map('intval', explode(',', $topic['subject_ids'])) : [];
-                $response['success'] = true;
-                $response['topic'] = $topic;
+                $_SESSION['flash_message'] = "Thema '{$topic['title']}' erfolgreich gelöscht.";
+                $_SESSION['flash_type'] = 'success';
                 break;
-                
-            default:
-                throw new Exception('Unbekannte Aktion.');
         }
+        
+        // Redirect zur gleichen Seite mit allen Parametern
+        $redirect_url = $_SERVER['PHP_SELF'] . '?page=themen';
+        if (isset($_GET['filter'])) $redirect_url .= '&filter=' . $_GET['filter'];
+        if (isset($_GET['sort'])) $redirect_url .= '&sort=' . $_GET['sort'];
+        if (isset($_GET['subject'])) $redirect_url .= '&subject=' . $_GET['subject'];
+        
+        header('Location: ' . $redirect_url);
+        exit();
+        
     } catch (Exception $e) {
         if (isset($db) && $db->inTransaction()) {
             $db->rollBack();
         }
-        $response['success'] = false;
-        $response['message'] = $e->getMessage();
+        $_SESSION['flash_message'] = $e->getMessage();
+        $_SESSION['flash_type'] = 'error';
+        
+        // Bei Fehler auch redirect mit allen Parametern
+        $redirect_url = $_SERVER['PHP_SELF'] . '?page=themen';
+        if (isset($_GET['filter'])) $redirect_url .= '&filter=' . $_GET['filter'];
+        if (isset($_GET['sort'])) $redirect_url .= '&sort=' . $_GET['sort'];
+        if (isset($_GET['subject'])) $redirect_url .= '&subject=' . $_GET['subject'];
+        
+        header('Location: ' . $redirect_url);
+        exit();
     }
-    
-    echo json_encode($response, JSON_UNESCAPED_UNICODE);
-    exit();
 }
 
 // Lehrerdaten und Schulinfo abrufen
@@ -223,6 +183,7 @@ if (!$teacher) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Lehrer Dashboard - <?= htmlspecialchars($teacher['school_name']) ?></title>
+    <link rel="stylesheet" href="css/dashboard.css">
     <style>
         * {
             margin: 0;
@@ -344,151 +305,6 @@ if (!$teacher) {
             opacity: 0.9;
         }
 
-        .modules-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
-            gap: 25px;
-        }
-
-        .module-card {
-            background: rgba(255, 255, 255, 0.8);
-            border: 2px solid transparent;
-            border-radius: 15px;
-            padding: 30px;
-            text-decoration: none;
-            color: #001133;
-            transition: all 0.3s ease;
-            display: block;
-            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
-        }
-
-        .module-card:hover {
-            transform: translateY(-8px);
-            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
-            border-color: #ff9900;
-            background: rgba(255, 255, 255, 0.95);
-            text-decoration: none;
-            color: #001133;
-        }
-
-        .module-card.disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-        }
-
-        .module-card.disabled:hover {
-            transform: none;
-            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
-            border-color: transparent;
-        }
-
-        .module-header {
-            display: flex;
-            align-items: center;
-            gap: 20px;
-            margin-bottom: 20px;
-        }
-
-        .module-icon {
-            font-size: 48px;
-            width: 80px;
-            height: 80px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: linear-gradient(135deg, #002b45, #063b52);
-            border-radius: 15px;
-            color: white;
-        }
-
-        .module-title {
-            font-size: 20px;
-            font-weight: 700;
-            margin-bottom: 5px;
-            color: #002b45;
-        }
-
-        .module-subtitle {
-            font-size: 14px;
-            opacity: 0.7;
-        }
-
-        .module-description {
-            font-size: 15px;
-            line-height: 1.6;
-            margin-bottom: 20px;
-            opacity: 0.8;
-        }
-
-        .module-status {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            font-size: 13px;
-        }
-
-        .status-badge {
-            padding: 6px 12px;
-            border-radius: 20px;
-            font-size: 12px;
-            font-weight: 600;
-        }
-
-        .status-available {
-            background: rgba(34, 197, 94, 0.2);
-            color: #15803d;
-            border: 1px solid rgba(34, 197, 94, 0.3);
-        }
-
-        .status-development {
-            background: rgba(255, 153, 0, 0.2);
-            color: #d97706;
-            border: 1px solid rgba(255, 153, 0, 0.3);
-        }
-
-        .action-button {
-            background: #ffffff;
-            color: #001133;
-            border: 2px solid #ff9900;
-            padding: 15px 30px;
-            border-radius: 999px;
-            font-weight: 600;
-            font-size: 16px;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            text-decoration: none;
-            display: inline-block;
-            margin: 20px auto;
-            text-align: center;
-        }
-
-        .action-button:hover {
-            background: #ff9900;
-            color: white;
-            transform: translateY(-2px);
-            box-shadow: 0 8px 20px rgba(255, 153, 0, 0.3);
-        }
-
-        .logout-btn {
-            position: absolute;
-            top: 20px;
-            right: 20px;
-            background: rgba(231, 76, 60, 0.9);
-            color: white;
-            padding: 10px 20px;
-            border: none;
-            border-radius: 999px;
-            text-decoration: none;
-            font-size: 14px;
-            font-weight: 600;
-            transition: all 0.3s ease;
-        }
-
-        .logout-btn:hover {
-            background: #c0392b;
-            transform: translateY(-2px);
-        }
-
         .content-section {
             background: rgba(255, 255, 255, 0.9);
             padding: 30px;
@@ -542,6 +358,49 @@ if (!$teacher) {
             color: #002b45;
         }
 
+        .action-button {
+            background: #ffffff;
+            color: #001133;
+            border: 2px solid #ff9900;
+            padding: 15px 30px;
+            border-radius: 999px;
+            font-weight: 600;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+            margin: 20px auto;
+            text-align: center;
+        }
+
+        .action-button:hover {
+            background: #ff9900;
+            color: white;
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(255, 153, 0, 0.3);
+        }
+
+        .logout-btn {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(231, 76, 60, 0.9);
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 999px;
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+
+        .logout-btn:hover {
+            background: #c0392b;
+            transform: translateY(-2px);
+        }
+
         @media (max-width: 768px) {
             .main-content {
                 padding: 30px 20px;
@@ -554,10 +413,6 @@ if (!$teacher) {
             .nav-tabs {
                 flex-direction: column;
                 align-items: center;
-            }
-
-            .modules-grid {
-                grid-template-columns: 1fr;
             }
 
             .tab-content {
@@ -625,18 +480,15 @@ if (!$teacher) {
                     break;
                     
                 case 'themen':
-                    // Prüfen ob die lehrer_themen.php existiert
-                    if (file_exists('lehrer_themen.php')) {
-                        // Die Datei direkt einbinden
-                        include 'lehrer_themen.php';
+                    // Themen-Modul einbinden
+                    if (file_exists('lehrer_themen_include.php')) {
+                        include 'lehrer_themen_include.php';
                     } else {
-                        // Fallback, falls die Datei nicht gefunden wird
                         echo '<div class="content-section">';
                         echo '<div class="empty-state">';
                         echo '<span class="empty-state-icon">⚠️</span>';
                         echo '<h3>Themen-Modul nicht gefunden</h3>';
-                        echo '<p>Die Datei lehrer_themen.php konnte nicht geladen werden.</p>';
-                        echo '<a href="lehrer_themen.php" class="action-button">Zur separaten Themen-Seite →</a>';
+                        echo '<p>Die Datei lehrer_themen_include.php konnte nicht geladen werden.</p>';
                         echo '</div>';
                         echo '</div>';
                     }
