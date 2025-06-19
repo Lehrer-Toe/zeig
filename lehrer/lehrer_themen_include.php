@@ -78,11 +78,12 @@ if ($filter === 'global') {
         $stmt->execute();
     }
 } else {
+    // FIX: Zeige alle Themen der Schule, nicht nur die des aktuellen Lehrers
     $query = "
         SELECT t.*, u.name as teacher_name
         FROM topics t 
         LEFT JOIN users u ON t.teacher_id = u.id
-        WHERE t.school_id = ? AND t.teacher_id = ? AND t.is_active = 1
+        WHERE t.school_id = ? AND t.is_active = 1
     ";
     
     if ($subject_filter !== 'all') {
@@ -93,9 +94,9 @@ if ($filter === 'global') {
     
     $stmt = $db->prepare($query);
     if ($subject_filter !== 'all') {
-        $stmt->execute([$school_id, $teacher_id, (int)$subject_filter]);
+        $stmt->execute([$school_id, (int)$subject_filter]);
     } else {
-        $stmt->execute([$school_id, $teacher_id]);
+        $stmt->execute([$school_id]);
     }
 }
 $topics = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -676,7 +677,7 @@ textarea.form-control {
             <option value="all" <?= $subject_filter === 'all' ? 'selected' : '' ?>>Alle Fächer</option>
             <?php foreach ($subjects as $subject): ?>
                 <option value="<?= $subject['id'] ?>" <?= $subject_filter == $subject['id'] ? 'selected' : '' ?> style="color: <?= htmlspecialchars($subject['color']) ?>">
-                    <?= htmlspecialchars($subject['short_name']) ?> - <?= htmlspecialchars($subject['name']) ?>
+                    <?= htmlspecialchars($subject['short_name']) ?> - <?= htmlspecialchars($subject['full_name']) ?>
                 </option>
             <?php endforeach; ?>
         </select>
@@ -725,7 +726,8 @@ textarea.form-control {
                                     <?php if ($filter === 'global' && isset($topic['school_name'])): ?>
                                         🏫 <?= htmlspecialchars($topic['school_name']) ?><br>
                                     <?php endif; ?>
-                                    <?php if ($filter === 'global' && $topic['teacher_id'] != $teacher_id): ?>
+                                    <?php // Zeige den Lehrer-Namen auch bei Schul-Themen, wenn es nicht der aktuelle Lehrer ist ?>
+                                    <?php if ($topic['teacher_id'] != $teacher_id): ?>
                                         👤 <?= htmlspecialchars($topic['teacher_name']) ?><br>
                                     <?php endif; ?>
                                     Erstellt: <?= date('d.m.Y H:i', strtotime($topic['created_at'])) ?>
@@ -756,6 +758,7 @@ textarea.form-control {
                     </div>
                 </div>
 
+                <?php // Bearbeitungs- und Löschbuttons nur für eigene Themen anzeigen ?>
                 <?php if ($topic['teacher_id'] == $teacher_id): ?>
                     <div class="topic-actions">
                         <a href="?page=themen&edit=<?= $topic['id'] ?>&filter=<?= $filter ?>&sort=<?= $sort_by ?>&subject=<?= $subject_filter ?>" class="btn btn-secondary btn-sm">

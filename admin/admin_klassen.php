@@ -1,5 +1,7 @@
 <?php
 require_once '../config.php';
+require_once '../php/db.php';
+require_once 'includes/student_functions.php';
 
 // Schuladmin-Zugriff prüfen
 $user = requireSchuladmin();
