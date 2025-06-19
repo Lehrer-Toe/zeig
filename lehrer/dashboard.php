@@ -173,20 +173,16 @@ if ($page === 'gruppen' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST
             throw new Exception('Ungültiger CSRF-Token');
         }
         
-        // Berechtigung prüfen für Erstellen/Bearbeiten
-        if (in_array($_POST['form_action'], ['create_group', 'update_group', 'delete_group'])) {
-            $stmt = $db->prepare("SELECT can_create_groups FROM users WHERE id = ?");
-            $stmt->execute([$teacher_id]);
-            if (!$stmt->fetchColumn()) {
-                throw new Exception('Sie haben keine Berechtigung, Gruppen zu verwalten.');
-            }
-        }
-        
         switch ($_POST['form_action']) {
             case 'create_group':
+                // Berechtigung prüfen
+                if (!$_SESSION['can_create_groups']) {
+                    throw new Exception('Sie haben keine Berechtigung, Gruppen zu erstellen.');
+                }
+                
                 $topic = trim($_POST['topic'] ?? '');
                 $class_id = (int)($_POST['class_id'] ?? 0);
-                $student_ids = $_POST['students'] ?? [];
+                $students = $_POST['students'] ?? [];
                 $examiners = $_POST['examiner'] ?? [];
                 $subjects = $_POST['subject'] ?? [];
                 
@@ -198,57 +194,44 @@ if ($page === 'gruppen' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST
                     throw new Exception('Bitte wählen Sie eine Klasse aus.');
                 }
                 
-                if (empty($student_ids)) {
+                if (empty($students)) {
                     throw new Exception('Bitte wählen Sie mindestens einen Schüler aus.');
                 }
                 
-                if (count($student_ids) > 4) {
+                if (count($students) > 4) {
                     throw new Exception('Maximal 4 Schüler pro Gruppe erlaubt.');
                 }
                 
                 $db->beginTransaction();
                 
-                // Prüfe ob Schüler bereits in Gruppen sind
-                $placeholders = str_repeat('?,', count($student_ids) - 1) . '?';
-                $stmt = $db->prepare("
-                    SELECT s.id, s.first_name, s.last_name
-                    FROM students s
-                    JOIN group_students gs ON s.id = gs.student_id
-                    WHERE s.id IN ($placeholders)
-                ");
-                $stmt->execute($student_ids);
-                $already_in_group = $stmt->fetchAll();
-                
-                if (!empty($already_in_group)) {
-                    $names = array_map(function($s) {
-                        return $s['first_name'] . ' ' . $s['last_name'];
-                    }, $already_in_group);
-                    throw new Exception('Folgende Schüler sind bereits in Gruppen: ' . implode(', ', $names));
-                }
-                
                 // Gruppe erstellen
                 $stmt = $db->prepare("
-                    INSERT INTO groups (school_id, class_id, name, teacher_id, created_at, updated_at) 
-                    VALUES (?, ?, ?, ?, NOW(), NOW())
+                    INSERT INTO groups (school_id, class_id, name, teacher_id, created_at) 
+                    VALUES (?, ?, ?, ?, NOW())
                 ");
                 $stmt->execute([$school_id, $class_id, $topic, $teacher_id]);
                 $group_id = $db->lastInsertId();
                 
-                // Schüler zuordnen
+                // Schüler zur Gruppe hinzufügen
                 $stmt = $db->prepare("
-                    INSERT INTO group_students (group_id, student_id, assigned_by, examiner_teacher_id, subject_id, assigned_at) 
-                    VALUES (?, ?, ?, ?, ?, NOW())
+                    INSERT INTO group_students (group_id, student_id, assigned_by, examiner_teacher_id, subject_id) 
+                    VALUES (?, ?, ?, ?, ?)
                 ");
                 
-                foreach ($student_ids as $student_id) {
-                    $examiner_id = isset($examiners[$student_id]) && $examiners[$student_id] ? $examiners[$student_id] : null;
-                    $subject_id = isset($subjects[$student_id]) && $subjects[$student_id] ? $subjects[$student_id] : null;
+                foreach ($students as $student_id) {
+                    $examiner_id = isset($examiners[$student_id]) ? (int)$examiners[$student_id] : null;
+                    $subject_id = isset($subjects[$student_id]) ? (int)$subjects[$student_id] : null;
+                    
                     $stmt->execute([$group_id, $student_id, $teacher_id, $examiner_id, $subject_id]);
                 }
                 
                 // Letzte ausgewählte Klasse speichern
-                $stmt = $db->prepare("UPDATE users SET last_selected_class_id = ? WHERE id = ?");
-                $stmt->execute([$class_id, $teacher_id]);
+                try {
+                    $stmt = $db->prepare("UPDATE users SET last_selected_class_id = ? WHERE id = ?");
+                    $stmt->execute([$class_id, $teacher_id]);
+                } catch (PDOException $e) {
+                    // Spalte existiert möglicherweise nicht - ignorieren
+                }
                 
                 $db->commit();
                 $_SESSION['flash_message'] = 'Gruppe erfolgreich erstellt.';
@@ -269,23 +252,30 @@ if ($page === 'gruppen' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST
                     throw new Exception('Thema ist erforderlich.');
                 }
                 
-                // Prüfen ob Gruppe dem Lehrer gehört
-                $stmt = $db->prepare("SELECT id FROM groups WHERE id = ? AND teacher_id = ? AND school_id = ? AND is_active = 1");
-                $stmt->execute([$group_id, $teacher_id, $school_id]);
+                // Prüfen ob Gruppe bearbeitet werden darf
+                $stmt = $db->prepare("
+                    SELECT id FROM groups 
+                    WHERE id = ? AND school_id = ? AND is_active = 1 
+                    AND (teacher_id = ? OR EXISTS (
+                        SELECT 1 FROM group_students gs 
+                        WHERE gs.group_id = groups.id AND gs.examiner_teacher_id = ?
+                    ))
+                ");
+                $stmt->execute([$group_id, $school_id, $teacher_id, $teacher_id]);
                 if (!$stmt->fetch()) {
                     throw new Exception('Gruppe nicht gefunden oder keine Berechtigung.');
                 }
                 
                 $db->beginTransaction();
                 
-                // Gruppe aktualisieren
+                // Gruppenname aktualisieren
                 $stmt = $db->prepare("UPDATE groups SET name = ?, updated_at = NOW() WHERE id = ?");
                 $stmt->execute([$topic, $group_id]);
                 
-                // Schüler-Zuordnungen aktualisieren
+                // Schülerzuweisungen aktualisieren
                 foreach ($examiners as $student_id => $examiner_id) {
-                    $subject_id = isset($subjects[$student_id]) && $subjects[$student_id] ? $subjects[$student_id] : null;
-                    $examiner_id = $examiner_id ? $examiner_id : null;
+                    $subject_id = isset($subjects[$student_id]) ? (int)$subjects[$student_id] : null;
+                    $examiner_id = $examiner_id ? (int)$examiner_id : null;
                     
                     $stmt = $db->prepare("
                         UPDATE group_students 
@@ -300,38 +290,23 @@ if ($page === 'gruppen' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST
                 $_SESSION['flash_type'] = 'success';
                 break;
                 
-            case 'remove_student':
-                $group_id = (int)($_POST['group_id'] ?? 0);
-                $student_id = (int)($_POST['student_id'] ?? 0);
-                
-                if ($group_id <= 0 || $student_id <= 0) {
-                    throw new Exception('Ungültige IDs.');
-                }
-                
-                // Prüfen ob Gruppe dem Lehrer gehört
-                $stmt = $db->prepare("SELECT id FROM groups WHERE id = ? AND teacher_id = ? AND school_id = ? AND is_active = 1");
-                $stmt->execute([$group_id, $teacher_id, $school_id]);
-                if (!$stmt->fetch()) {
-                    throw new Exception('Gruppe nicht gefunden oder keine Berechtigung.');
-                }
-                
-                // Schüler entfernen
-                $stmt = $db->prepare("DELETE FROM group_students WHERE group_id = ? AND student_id = ?");
-                $stmt->execute([$group_id, $student_id]);
-                
-                $_SESSION['flash_message'] = 'Schüler erfolgreich aus der Gruppe entfernt.';
-                $_SESSION['flash_type'] = 'success';
-                break;
-                
             case 'delete_group':
+                // Berechtigung prüfen
+                if (!$_SESSION['can_create_groups']) {
+                    throw new Exception('Sie haben keine Berechtigung, Gruppen zu löschen.');
+                }
+                
                 $group_id = (int)($_POST['group_id'] ?? 0);
                 
                 if ($group_id <= 0) {
                     throw new Exception('Ungültige Gruppen-ID.');
                 }
                 
-                // Prüfen ob Gruppe dem Lehrer gehört
-                $stmt = $db->prepare("SELECT name FROM groups WHERE id = ? AND teacher_id = ? AND school_id = ? AND is_active = 1");
+                // Prüfen ob Gruppe gelöscht werden darf
+                $stmt = $db->prepare("
+                    SELECT name FROM groups 
+                    WHERE id = ? AND teacher_id = ? AND school_id = ? AND is_active = 1
+                ");
                 $stmt->execute([$group_id, $teacher_id, $school_id]);
                 $group = $stmt->fetch();
                 if (!$group) {
@@ -345,6 +320,32 @@ if ($page === 'gruppen' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST
                 $_SESSION['flash_message'] = "Gruppe '{$group['name']}' erfolgreich gelöscht.";
                 $_SESSION['flash_type'] = 'success';
                 break;
+                
+            case 'remove_student':
+                $group_id = (int)($_POST['group_id'] ?? 0);
+                $student_id = (int)($_POST['student_id'] ?? 0);
+                
+                if ($group_id <= 0 || $student_id <= 0) {
+                    throw new Exception('Ungültige Daten.');
+                }
+                
+                // Prüfen ob Berechtigung vorhanden
+                $stmt = $db->prepare("
+                    SELECT id FROM groups 
+                    WHERE id = ? AND teacher_id = ? AND school_id = ? AND is_active = 1
+                ");
+                $stmt->execute([$group_id, $teacher_id, $school_id]);
+                if (!$stmt->fetch()) {
+                    throw new Exception('Keine Berechtigung für diese Aktion.');
+                }
+                
+                // Schüler aus Gruppe entfernen
+                $stmt = $db->prepare("DELETE FROM group_students WHERE group_id = ? AND student_id = ?");
+                $stmt->execute([$group_id, $student_id]);
+                
+                $_SESSION['flash_message'] = 'Schüler erfolgreich aus der Gruppe entfernt.';
+                $_SESSION['flash_type'] = 'success';
+                break;
         }
         
         header('Location: ' . $_SERVER['PHP_SELF'] . '?page=gruppen');
@@ -356,7 +357,207 @@ if ($page === 'gruppen' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST
         }
         $_SESSION['flash_message'] = $e->getMessage();
         $_SESSION['flash_type'] = 'error';
+        
         header('Location: ' . $_SERVER['PHP_SELF'] . '?page=gruppen');
+        exit();
+    }
+}
+
+// === VORLAGEN-FORMULARVERARBEITUNG (VOR HTML-AUSGABE!) ===
+if ($page === 'vorlagen' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form_action'])) {
+    $db = getDB();
+    
+    try {
+        // CSRF-Token prüfen
+        if (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
+            throw new Exception('Ungültiger CSRF-Token');
+        }
+        
+        switch ($_POST['form_action']) {
+            case 'create_template':
+                $template_name = trim($_POST['template_name'] ?? '');
+                
+                if (empty($template_name)) {
+                    throw new Exception('Vorlagenname ist erforderlich.');
+                }
+                
+                // Prüfen ob maximale Anzahl erreicht
+                $stmt = $db->prepare("
+                    SELECT COUNT(*) FROM rating_templates 
+                    WHERE teacher_id = ? AND is_standard = 0 AND is_active = 1
+                ");
+                $stmt->execute([$teacher_id]);
+                $count = $stmt->fetchColumn();
+                
+                if ($count >= 10) {
+                    throw new Exception('Sie haben bereits die maximale Anzahl von 10 benutzerdefinierten Vorlagen erreicht.');
+                }
+                
+                $db->beginTransaction();
+                
+                // Vorlage erstellen
+                $stmt = $db->prepare("
+                    INSERT INTO rating_templates (teacher_id, name, is_standard, is_active, created_at) 
+                    VALUES (?, ?, 0, 1, NOW())
+                ");
+                $stmt->execute([$teacher_id, $template_name]);
+                $template_id = $db->lastInsertId();
+                
+                // Reflexion als Standardkategorie hinzufügen
+                $stmt = $db->prepare("
+                    INSERT INTO rating_template_categories (template_id, name, weight, display_order) 
+                    VALUES (?, 'Reflexion', 30, 1)
+                ");
+                $stmt->execute([$template_id]);
+                
+                $db->commit();
+                $_SESSION['flash_message'] = 'Vorlage erfolgreich erstellt.';
+                $_SESSION['flash_type'] = 'success';
+                
+                // Direkt zur Bearbeitung weiterleiten
+                header('Location: ' . $_SERVER['PHP_SELF'] . '?page=vorlagen&edit=' . $template_id);
+                exit();
+                break;
+                
+            case 'add_category':
+                $template_id = (int)($_POST['template_id'] ?? 0);
+                $category_name = trim($_POST['category_name'] ?? '');
+                $weight = (int)($_POST['weight'] ?? 0);
+                
+                if ($template_id <= 0) {
+                    throw new Exception('Ungültige Vorlagen-ID.');
+                }
+                
+                if (empty($category_name)) {
+                    throw new Exception('Kategoriename ist erforderlich.');
+                }
+                
+                if ($weight < 1 || $weight > 70) {
+                    throw new Exception('Gewichtung muss zwischen 1 und 70 liegen.');
+                }
+                
+                // Prüfen ob Vorlage dem Lehrer gehört
+                $stmt = $db->prepare("
+                    SELECT id FROM rating_templates 
+                    WHERE id = ? AND teacher_id = ? AND is_standard = 0 AND is_active = 1
+                ");
+                $stmt->execute([$template_id, $teacher_id]);
+                if (!$stmt->fetch()) {
+                    throw new Exception('Vorlage nicht gefunden oder keine Berechtigung.');
+                }
+                
+                // Aktuelle Gesamtgewichtung prüfen
+                $stmt = $db->prepare("
+                    SELECT SUM(weight) FROM rating_template_categories 
+                    WHERE template_id = ?
+                ");
+                $stmt->execute([$template_id]);
+                $current_weight = (int)$stmt->fetchColumn();
+                
+                if ($current_weight + $weight > 100) {
+                    throw new Exception('Die Gesamtgewichtung würde 100% überschreiten.');
+                }
+                
+                // Nächste display_order bestimmen
+                $stmt = $db->prepare("
+                    SELECT MAX(display_order) FROM rating_template_categories 
+                    WHERE template_id = ?
+                ");
+                $stmt->execute([$template_id]);
+                $max_order = (int)$stmt->fetchColumn();
+                
+                // Kategorie hinzufügen
+                $stmt = $db->prepare("
+                    INSERT INTO rating_template_categories (template_id, name, weight, display_order) 
+                    VALUES (?, ?, ?, ?)
+                ");
+                $stmt->execute([$template_id, $category_name, $weight, $max_order + 1]);
+                
+                $_SESSION['flash_message'] = 'Kategorie erfolgreich hinzugefügt.';
+                $_SESSION['flash_type'] = 'success';
+                break;
+                
+            case 'delete_category':
+                $category_id = (int)($_POST['category_id'] ?? 0);
+                $template_id = (int)($_POST['template_id'] ?? 0);
+                
+                if ($category_id <= 0 || $template_id <= 0) {
+                    throw new Exception('Ungültige Daten.');
+                }
+                
+                // Prüfen ob Kategorie zur Vorlage des Lehrers gehört
+                $stmt = $db->prepare("
+                    SELECT c.name FROM rating_template_categories c
+                    JOIN rating_templates t ON c.template_id = t.id
+                    WHERE c.id = ? AND t.id = ? AND t.teacher_id = ? 
+                    AND t.is_standard = 0 AND t.is_active = 1
+                    AND c.name != 'Reflexion'
+                ");
+                $stmt->execute([$category_id, $template_id, $teacher_id]);
+                $category = $stmt->fetch();
+                
+                if (!$category) {
+                    throw new Exception('Kategorie nicht gefunden oder kann nicht gelöscht werden.');
+                }
+                
+                // Kategorie löschen
+                $stmt = $db->prepare("DELETE FROM rating_template_categories WHERE id = ?");
+                $stmt->execute([$category_id]);
+                
+                $_SESSION['flash_message'] = "Kategorie '{$category['name']}' erfolgreich entfernt.";
+                $_SESSION['flash_type'] = 'success';
+                break;
+                
+            case 'delete_template':
+                $template_id = (int)($_POST['template_id'] ?? 0);
+                
+                if ($template_id <= 0) {
+                    throw new Exception('Ungültige Vorlagen-ID.');
+                }
+                
+                // Prüfen ob Vorlage dem Lehrer gehört
+                $stmt = $db->prepare("
+                    SELECT name FROM rating_templates 
+                    WHERE id = ? AND teacher_id = ? AND is_standard = 0 AND is_active = 1
+                ");
+                $stmt->execute([$template_id, $teacher_id]);
+                $template = $stmt->fetch();
+                
+                if (!$template) {
+                    throw new Exception('Vorlage nicht gefunden oder keine Berechtigung.');
+                }
+                
+                // Soft delete
+                $stmt = $db->prepare("UPDATE rating_templates SET is_active = 0 WHERE id = ?");
+                $stmt->execute([$template_id]);
+                
+                $_SESSION['flash_message'] = "Vorlage '{$template['name']}' erfolgreich gelöscht.";
+                $_SESSION['flash_type'] = 'success';
+                break;
+        }
+        
+        // Redirect mit edit-Parameter falls vorhanden
+        $redirect_url = $_SERVER['PHP_SELF'] . '?page=vorlagen';
+        if (isset($_POST['template_id']) && $_POST['form_action'] !== 'delete_template') {
+            $redirect_url .= '&edit=' . $_POST['template_id'];
+        }
+        
+        header('Location: ' . $redirect_url);
+        exit();
+        
+    } catch (Exception $e) {
+        if (isset($db) && $db->inTransaction()) {
+            $db->rollBack();
+        }
+        $_SESSION['flash_message'] = $e->getMessage();
+        $_SESSION['flash_type'] = 'error';
+        
+        $redirect_url = $_SERVER['PHP_SELF'] . '?page=vorlagen';
+        if (isset($_POST['template_id'])) {
+            $redirect_url .= '&edit=' . $_POST['template_id'];
+        }
+        
+        header('Location: ' . $redirect_url);
         exit();
     }
 }
@@ -374,43 +575,6 @@ $teacher = $stmt->fetch();
 
 if (!$teacher) {
     die('Lehrerdaten konnten nicht geladen werden.');
-}
-
-// can_create_groups in Session speichern für Include-Dateien
-$_SESSION['can_create_groups'] = $teacher['can_create_groups'];
-
-// AJAX-Handler für Schüler-Abruf
-if (isset($_GET['action']) && $_GET['action'] === 'get_students' && isset($_GET['class_id'])) {
-    $class_id = (int)$_GET['class_id'];
-    if ($class_id > 0) {
-        $stmt = $db->prepare("
-            SELECT s.*, 
-                   CASE WHEN gs.id IS NOT NULL THEN 1 ELSE 0 END as has_group
-            FROM students s
-            LEFT JOIN group_students gs ON s.id = gs.student_id
-            WHERE s.class_id = ? AND s.is_active = 1
-            ORDER BY s.last_name, s.first_name
-        ");
-        $stmt->execute([$class_id]);
-        $students = $stmt->fetchAll();
-        
-        foreach ($students as $student) {
-            $isDisabled = $student['has_group'] ? 'disabled' : '';
-            $name = htmlspecialchars($student['first_name'] . ' ' . $student['last_name']);
-            echo <<<HTML
-                <label class="student-checkbox {$isDisabled}">
-                    <input type="checkbox" name="students[]" value="{$student['id']}" 
-                        onchange="toggleStudent({$student['id']}, '{$name}')" 
-                        {$isDisabled}>
-                    <span>{$name}</span>
-HTML;
-            if ($student['has_group']) {
-                echo '<small style="color: #999;"> (bereits in Gruppe)</small>';
-            }
-            echo '</label>';
-        }
-    }
-    exit();
 }
 ?>
 <!DOCTYPE html>
@@ -759,16 +923,18 @@ HTML;
                     break;
 
                 case 'vorlagen':
-                    echo '<h2 style="text-align: center; color: #002b45; margin-bottom: 30px;">📋 Bewertungsvorlagen</h2>';
-                    echo '<p style="text-align: center; margin-bottom: 30px; color: #666;">Erstellen und verwalten Sie Bewertungsvorlagen für wiederkehrende Aufgaben.</p>';
-                    
-                    echo '<div class="content-section">';
-                    echo '<div class="empty-state">';
-                    echo '<span class="empty-state-icon">📋</span>';
-                    echo '<h3>Vorlagen-System in Entwicklung</h3>';
-                    echo '<p>Erstellen Sie wiederverwendbare Bewertungsvorlagen für verschiedene Projekttypen.</p>';
-                    echo '</div>';
-                    echo '</div>';
+                    // Bewertungsvorlagen-Modul einbinden
+                    if (file_exists('lehrer_vorlagen_include.php')) {
+                        include 'lehrer_vorlagen_include.php';
+                    } else {
+                        echo '<div class="content-section">';
+                        echo '<div class="empty-state">';
+                        echo '<span class="empty-state-icon">⚠️</span>';
+                        echo '<h3>Vorlagen-Modul nicht gefunden</h3>';
+                        echo '<p>Die Datei lehrer_vorlagen_include.php konnte nicht geladen werden.</p>';
+                        echo '</div>';
+                        echo '</div>';
+                    }
                     break;
 
                 case 'uebersicht':
