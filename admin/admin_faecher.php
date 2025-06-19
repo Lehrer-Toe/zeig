@@ -204,6 +204,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     throw new Exception('Fehler beim Löschen. Möglicherweise wird das Fach noch verwendet.');
                 }
                 break;
+                
+            case 'delete_all':
+                $confirm = $_POST['confirm'] ?? '';
+                if ($confirm !== 'DELETE_ALL_SUBJECTS') {
+                    throw new Exception('Sicherheitsbestätigung fehlgeschlagen.');
+                }
+                
+                $stmt = $db->prepare("DELETE FROM subjects WHERE school_id = ?");
+                if ($stmt->execute([$school_id])) {
+                    $count = $stmt->rowCount();
+                    $response = ['success' => true, 'message' => "$count Fächer wurden gelöscht.", 'reload' => true];
+                } else {
+                    throw new Exception('Fehler beim Löschen der Fächer.');
+                }
+                break;
         }
     } catch (Exception $e) {
         $response['message'] = $e->getMessage();
@@ -261,6 +276,33 @@ try {
         .btn-danger:hover { background: linear-gradient(135deg, #dc2626, #b91c1c); transform: translateY(-1px); }
         .btn-edit { background: linear-gradient(135deg, #f59e0b, #d97706); color: white; border: 1px solid rgba(245,158,11,0.3); }
         .btn-edit:hover { background: linear-gradient(135deg, #d97706, #b45309); transform: translateY(-1px); }
+        
+        /* Besonderer Style für den "Alle löschen" Button */
+        .btn-danger-all { 
+            background: linear-gradient(135deg, #b91c1c, #7f1d1d); 
+            color: white; 
+            border: 2px solid #dc2626;
+            position: relative;
+            overflow: hidden;
+        }
+        .btn-danger-all:hover { 
+            background: linear-gradient(135deg, #991b1b, #450a0a); 
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(220,38,38,0.5);
+        }
+        .btn-danger-all::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: rgba(255,255,255,0.1);
+            transition: left 0.3s;
+        }
+        .btn-danger-all:hover::before {
+            left: 100%;
+        }
         
         .alert { padding: 1rem; border-radius: 0.5rem; margin-bottom: 2rem; display: none; font-weight: 500; }
         .alert-success { background: rgba(34,197,94,0.1); border: 1px solid rgba(34,197,94,0.3); color: #86efac; }
@@ -327,6 +369,12 @@ try {
         <div class="alert alert-danger" style="display: block;">
             <strong>⚠️ Hinweis:</strong> Die Fächer-Tabelle existiert noch nicht. 
             Bitte führen Sie die Migration aus: <code>php migrate_subjects.php</code>
+        </div>
+        <?php endif; ?>
+        
+        <?php if (!empty($subjects)): ?>
+        <div style="text-align: right; margin-bottom: 1rem;">
+            <button class="btn btn-danger" onclick="deleteAllSubjects()">🗑️ Alle Fächer löschen</button>
         </div>
         <?php endif; ?>
         
@@ -488,6 +536,38 @@ try {
                 if (data.success) {
                     showAlert(data.message);
                     document.querySelector(`[data-id="${id}"]`).remove();
+                } else {
+                    showAlert(data.message, 'danger');
+                }
+            })
+            .catch(() => showAlert('Netzwerkfehler beim Löschen.', 'danger'));
+        }
+        
+        function deleteAllSubjects() {
+            const count = document.querySelectorAll('.subject-item').length;
+            if (count === 0) {
+                showAlert('Keine Fächer vorhanden.', 'danger');
+                return;
+            }
+            
+            const confirmMsg = `⚠️ ACHTUNG: Sie sind dabei ALLE ${count} Fächer unwiderruflich zu löschen!\n\nDies kann nicht rückgängig gemacht werden!\n\nMöchten Sie wirklich fortfahren?`;
+            
+            if (!confirm(confirmMsg)) return;
+            
+            // Zweite Sicherheitsabfrage
+            const userInput = prompt(`Zur Bestätigung geben Sie bitte "LÖSCHEN" ein:`);
+            if (userInput !== 'LÖSCHEN') {
+                showAlert('Vorgang abgebrochen.', 'danger');
+                return;
+            }
+            
+            apiCall('delete_all', { confirm: 'DELETE_ALL_SUBJECTS' })
+            .then(data => {
+                if (data.success) {
+                    showAlert(data.message);
+                    if (data.reload) {
+                        setTimeout(() => window.location.reload(), 1000);
+                    }
                 } else {
                     showAlert(data.message, 'danger');
                 }

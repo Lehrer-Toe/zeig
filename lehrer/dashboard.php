@@ -16,6 +16,9 @@ if (isset($_SESSION['school_id'])) {
 }
 
 // CSRF-Token generieren falls nicht vorhanden
+
+$db = getDB();
+
 if (!isset($_SESSION['csrf_token'])) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 }
@@ -562,6 +565,307 @@ if ($page === 'vorlagen' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POS
     }
 }
 
+// === BEWERTUNGS-FORMULARVERARBEITUNG (VOR HTML-AUSGABE!) ===
+if ($page === 'bewerten' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    $db = getDB();
+    
+    try {
+        // CSRF-Token prüfen
+        if (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
+            throw new Exception('Ungültiger CSRF-Token');
+        }
+        
+        switch ($_POST['action']) {
+            case 'save_rating':
+                $student_id = (int)$_POST['student_id'];
+                $group_id = (int)$_POST['group_id'];
+                $template_id = (int)$_POST['template_id'];
+                $final_grade = isset($_POST['final_grade']) && $_POST['final_grade'] !== '' ? 
+                               (float)$_POST['final_grade'] : null;
+                $category_ratings = $_POST['category_rating'] ?? [];
+                
+                // Berechtigung prüfen
+                $stmt = $db->prepare("
+                    SELECT COUNT(*) FROM group_students 
+                    WHERE student_id = ? AND group_id = ? AND examiner_teacher_id = ?
+                ");
+                $stmt->execute([$student_id, $group_id, $teacher_id]);
+                if (!$stmt->fetchColumn()) {
+                    throw new Exception('Keine Berechtigung für diese Aktion.');
+                }
+                
+                $db->beginTransaction();
+                
+                // Prüfen ob bereits eine Bewertung existiert
+                $stmt = $db->prepare("
+                    SELECT id FROM ratings 
+                    WHERE student_id = ? AND group_id = ? AND teacher_id = ?
+                ");
+                $stmt->execute([$student_id, $group_id, $teacher_id]);
+                $rating_id = $stmt->fetchColumn();
+                
+                // criteria_id wird nicht mehr verwendet, setze auf 1 als Platzhalter
+                $criteria_id = 1; // Dummy-Wert für Legacy-Spalte
+                $points = 0; // Dummy-Wert für Legacy-Spalte
+                
+                if ($rating_id) {
+                    // Update bestehende Bewertung
+                    $stmt = $db->prepare("
+                        UPDATE ratings 
+                        SET template_id = ?, criteria_id = ?, points = ?, final_grade = ?, 
+                            is_complete = ?, rating_date = CURDATE(), updated_at = NOW()
+                        WHERE id = ?
+                    ");
+                    $is_complete = !empty($category_ratings) && $final_grade !== null ? 1 : 0;
+                    $stmt->execute([$template_id, $criteria_id, $points, $final_grade, 
+                                   $is_complete, $rating_id]);
+                } else {
+                    // Neue Bewertung erstellen
+                    $stmt = $db->prepare("
+                        INSERT INTO ratings (student_id, teacher_id, group_id, template_id, 
+                                           criteria_id, points, final_grade, is_complete, 
+                                           rating_date, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURDATE(), NOW())
+                    ");
+                    $is_complete = !empty($category_ratings) && $final_grade !== null ? 1 : 0;
+                    $stmt->execute([$student_id, $teacher_id, $group_id, $template_id, 
+                                  $criteria_id, $points, $final_grade, $is_complete]);
+                    $rating_id = $db->lastInsertId();
+                }
+                
+                // Alte Kategorie-Bewertungen löschen
+                $stmt = $db->prepare("DELETE FROM rating_categories WHERE rating_id = ?");
+                $stmt->execute([$rating_id]);
+                
+                // Neue Kategorie-Bewertungen speichern
+                if (!empty($category_ratings)) {
+                    $stmt = $db->prepare("
+                        INSERT INTO rating_categories (rating_id, category_id, points)
+                        VALUES (?, ?, ?)
+                    ");
+                    
+                    foreach ($category_ratings as $category_id => $points) {
+                        if ($points !== '') {
+                            $stmt->execute([$rating_id, (int)$category_id, (float)$points]);
+                        }
+                    }
+                }
+                
+                $db->commit();
+                $_SESSION['flash_message'] = 'Bewertung erfolgreich gespeichert.';
+                $_SESSION['flash_type'] = 'success';
+                
+                // Redirect je nach Button
+                if (isset($_POST['save_and_close'])) {
+                    header('Location: ' . $_SERVER['PHP_SELF'] . '?page=bewerten');
+                } else {
+                    header('Location: ' . $_SERVER['PHP_SELF'] . '?page=bewerten&rate=' . 
+                           $student_id . '&group=' . $group_id);
+                }
+                exit();
+                
+                break;
+        }
+        
+    } catch (Exception $e) {
+        if (isset($db) && $db->inTransaction()) {
+            $db->rollBack();
+        }
+        $_SESSION['flash_message'] = $e->getMessage();
+        $_SESSION['flash_type'] = 'error';
+        
+        header('Location: ' . $_SERVER['PHP_SELF'] . '?page=bewerten');
+        exit();
+    }
+}
+
+
+// === BEWERTEN-FORMULARVERARBEITUNG (VOR HTML-AUSGABE!) ===
+// Dieser Code muss in dashboard.php VOR der HTML-Ausgabe eingefügt werden
+// Am besten nach den anderen Formularverarbeitungen (z.B. nach Themen/Gruppen)
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form_action']) && isset($_GET['page']) && $_GET['page'] === 'bewerten') {
+    try {
+        // CSRF-Token prüfen
+        if (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
+            throw new Exception('Ungültiger CSRF-Token');
+        }
+        
+        switch ($_POST['form_action']) {
+            case 'save_rating':
+                $student_id = (int)$_POST['student_id'];
+                $group_id = (int)$_POST['group_id'];
+                $template_id = (int)$_POST['template_id'];
+                $final_grade = isset($_POST['final_grade']) && $_POST['final_grade'] !== '' ? (float)$_POST['final_grade'] : null;
+                $category_ratings = $_POST['category_rating'] ?? [];
+                
+                // Berechtigung prüfen
+                $stmt = $db->prepare("
+                    SELECT COUNT(*) FROM group_students 
+                    WHERE student_id = ? AND group_id = ? AND examiner_teacher_id = ?
+                ");
+                $stmt->execute([$student_id, $group_id, $teacher_id]);
+                if (!$stmt->fetchColumn()) {
+                    throw new Exception('Keine Berechtigung für diese Aktion.');
+                }
+                
+                $db->beginTransaction();
+                
+                // Prüfen ob bereits eine Bewertung existiert
+                $stmt = $db->prepare("
+                    SELECT id FROM ratings 
+                    WHERE student_id = ? AND group_id = ? AND teacher_id = ?
+                ");
+                $stmt->execute([$student_id, $group_id, $teacher_id]);
+                $rating_id = $stmt->fetchColumn();
+                
+                if ($rating_id) {
+                    // Update bestehende Bewertung
+                    $stmt = $db->prepare("
+                        UPDATE ratings 
+                        SET template_id = ?, final_grade = ?, is_complete = ?, 
+                            rating_date = CURDATE(), updated_at = NOW()
+                        WHERE id = ?
+                    ");
+                    $is_complete = !empty($category_ratings) && $final_grade !== null ? 1 : 0;
+                    $stmt->execute([$template_id, $final_grade, $is_complete, $rating_id]);
+                } else {
+                    // Neue Bewertung erstellen - WICHTIG: criteria_id mit Standardwert setzen
+                    $stmt = $db->prepare("
+                        INSERT INTO ratings (student_id, teacher_id, group_id, template_id, 
+                                           final_grade, is_complete, rating_date, created_at, criteria_id, points)
+                        VALUES (?, ?, ?, ?, ?, ?, CURDATE(), NOW(), 1, 0)
+                    ");
+                    $is_complete = !empty($category_ratings) && $final_grade !== null ? 1 : 0;
+                    $stmt->execute([$student_id, $teacher_id, $group_id, $template_id, 
+                                  $final_grade, $is_complete]);
+                    $rating_id = $db->lastInsertId();
+                }
+                
+                // Alte Kategorie-Bewertungen löschen
+                $stmt = $db->prepare("DELETE FROM rating_categories WHERE rating_id = ?");
+                $stmt->execute([$rating_id]);
+                
+                // Neue Kategorie-Bewertungen speichern
+                if (!empty($category_ratings)) {
+                    $stmt = $db->prepare("
+                        INSERT INTO rating_categories (rating_id, category_id, points)
+                        VALUES (?, ?, ?)
+                    ");
+                    
+                    foreach ($category_ratings as $category_id => $points) {
+                        if ($points !== '') {
+                            $stmt->execute([$rating_id, (int)$category_id, (float)$points]);
+                        }
+                    }
+                }
+                
+                $db->commit();
+                $_SESSION['flash_message'] = 'Bewertung erfolgreich gespeichert.';
+                $_SESSION['flash_type'] = 'success';
+                
+                // Redirect je nach Button
+                $redirect_url = $_SERVER['PHP_SELF'] . '?page=bewerten';
+                if (isset($_POST['save_and_close'])) {
+                    // Zurück zur Übersicht
+                } else {
+                    // Auf der Bewertungsseite bleiben
+                    $redirect_url .= '&rate=' . $student_id . '&group=' . $group_id . '&tab=rating';
+                }
+                
+                header('Location: ' . $redirect_url);
+                exit();
+                
+                break;
+                
+            case 'save_strengths':
+                $student_id = (int)$_POST['student_id'];
+                $group_id = (int)$_POST['group_id'];
+                $strength_items = $_POST['strength_items'] ?? [];
+                
+                // Berechtigung prüfen
+                $stmt = $db->prepare("
+                    SELECT COUNT(*) FROM group_students 
+                    WHERE student_id = ? AND group_id = ? AND examiner_teacher_id = ?
+                ");
+                $stmt->execute([$student_id, $group_id, $teacher_id]);
+                if (!$stmt->fetchColumn()) {
+                    throw new Exception('Keine Berechtigung für diese Aktion.');
+                }
+                
+                $db->beginTransaction();
+                
+                // Prüfen ob bereits eine Bewertung existiert
+                $stmt = $db->prepare("
+                    SELECT id FROM ratings 
+                    WHERE student_id = ? AND group_id = ? AND teacher_id = ?
+                ");
+                $stmt->execute([$student_id, $group_id, $teacher_id]);
+                $rating_id = $stmt->fetchColumn();
+                
+                if (!$rating_id) {
+                    // Bewertung muss existieren bevor Stärken gespeichert werden können
+                    throw new Exception('Bitte speichern Sie zuerst die Bewertung.');
+                }
+                
+                // Alte Stärken löschen
+                $stmt = $db->prepare("DELETE FROM rating_strengths WHERE rating_id = ?");
+                $stmt->execute([$rating_id]);
+                
+                // Neue Stärken speichern
+                if (!empty($strength_items)) {
+                    $stmt = $db->prepare("
+                        INSERT INTO rating_strengths (rating_id, strength_item_id)
+                        VALUES (?, ?)
+                    ");
+                    
+                    foreach ($strength_items as $item_id) {
+                        $stmt->execute([$rating_id, (int)$item_id]);
+                    }
+                }
+                
+                $db->commit();
+                $_SESSION['flash_message'] = 'Stärken erfolgreich gespeichert.';
+                $_SESSION['flash_type'] = 'success';
+                
+                // Redirect je nach Button
+                $redirect_url = $_SERVER['PHP_SELF'] . '?page=bewerten';
+                if (isset($_POST['save_and_close'])) {
+                    // Zurück zur Übersicht - Filter und Sort beibehalten
+                    if (isset($_GET['status'])) $redirect_url .= '&status=' . $_GET['status'];
+                    if (isset($_GET['sort'])) $redirect_url .= '&sort=' . $_GET['sort'];
+                } else {
+                    // Auf der Stärken-Seite bleiben
+                    $redirect_url .= '&rate=' . $student_id . '&group=' . $group_id . '&tab=strengths';
+                }
+                
+                header('Location: ' . $redirect_url);
+                exit();
+                
+                break;
+        }
+        
+    } catch (Exception $e) {
+        if (isset($db) && $db->inTransaction()) {
+            $db->rollBack();
+        }
+        $_SESSION['flash_message'] = $e->getMessage();
+        $_SESSION['flash_type'] = 'error';
+        
+        // Bei Fehler auch redirect mit allen Parametern
+        $redirect_url = $_SERVER['PHP_SELF'] . '?page=bewerten';
+        if (isset($student_id) && isset($group_id)) {
+            $redirect_url .= '&rate=' . $student_id . '&group=' . $group_id;
+            if (isset($_POST['form_action']) && $_POST['form_action'] === 'save_strengths') {
+                $redirect_url .= '&tab=strengths';
+            }
+        }
+        
+        header('Location: ' . $redirect_url);
+        exit();
+    }
+}
+
 // Lehrerdaten und Schulinfo abrufen
 $db = getDB();
 $stmt = $db->prepare("
@@ -576,6 +880,385 @@ $teacher = $stmt->fetch();
 if (!$teacher) {
     die('Lehrerdaten konnten nicht geladen werden.');
 }
+
+
+// === BEWERTEN-FORMULARVERARBEITUNG (VOR HTML-AUSGABE!) ===
+// Dieser Code muss in dashboard.php VOR der HTML-Ausgabe eingefügt werden
+// Am besten nach den anderen Formularverarbeitungen (z.B. nach Themen/Gruppen)
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form_action']) && isset($_GET['page']) && $_GET['page'] === 'bewerten') {
+    try {
+        // CSRF-Token prüfen
+        if (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
+            throw new Exception('Ungültiger CSRF-Token');
+        }
+        
+        switch ($_POST['form_action']) {
+            case 'save_rating':
+                $student_id = (int)$_POST['student_id'];
+                $group_id = (int)$_POST['group_id'];
+                $template_id = (int)$_POST['template_id'];
+                $final_grade = isset($_POST['final_grade']) && $_POST['final_grade'] !== '' ? (float)$_POST['final_grade'] : null;
+                $category_ratings = $_POST['category_rating'] ?? [];
+                
+                // Berechtigung prüfen
+                $stmt = $db->prepare("
+                    SELECT COUNT(*) FROM group_students 
+                    WHERE student_id = ? AND group_id = ? AND examiner_teacher_id = ?
+                ");
+                $stmt->execute([$student_id, $group_id, $teacher_id]);
+                if (!$stmt->fetchColumn()) {
+                    throw new Exception('Keine Berechtigung für diese Aktion.');
+                }
+                
+                $db->beginTransaction();
+                
+                // Prüfen ob bereits eine Bewertung existiert
+                $stmt = $db->prepare("
+                    SELECT id FROM ratings 
+                    WHERE student_id = ? AND group_id = ? AND teacher_id = ?
+                ");
+                $stmt->execute([$student_id, $group_id, $teacher_id]);
+                $rating_id = $stmt->fetchColumn();
+                
+                if ($rating_id) {
+                    // Update bestehende Bewertung
+                    $stmt = $db->prepare("
+                        UPDATE ratings 
+                        SET template_id = ?, final_grade = ?, is_complete = ?, 
+                            rating_date = CURDATE(), updated_at = NOW()
+                        WHERE id = ?
+                    ");
+                    $is_complete = !empty($category_ratings) && $final_grade !== null ? 1 : 0;
+                    $stmt->execute([$template_id, $final_grade, $is_complete, $rating_id]);
+                } else {
+                    // Neue Bewertung erstellen - WICHTIG: criteria_id mit Standardwert setzen
+                    $stmt = $db->prepare("
+                        INSERT INTO ratings (student_id, teacher_id, group_id, template_id, 
+                                           final_grade, is_complete, rating_date, created_at, criteria_id, points)
+                        VALUES (?, ?, ?, ?, ?, ?, CURDATE(), NOW(), 1, 0)
+                    ");
+                    $is_complete = !empty($category_ratings) && $final_grade !== null ? 1 : 0;
+                    $stmt->execute([$student_id, $teacher_id, $group_id, $template_id, 
+                                  $final_grade, $is_complete]);
+                    $rating_id = $db->lastInsertId();
+                }
+                
+                // Alte Kategorie-Bewertungen löschen
+                $stmt = $db->prepare("DELETE FROM rating_categories WHERE rating_id = ?");
+                $stmt->execute([$rating_id]);
+                
+                // Neue Kategorie-Bewertungen speichern
+                if (!empty($category_ratings)) {
+                    $stmt = $db->prepare("
+                        INSERT INTO rating_categories (rating_id, category_id, points)
+                        VALUES (?, ?, ?)
+                    ");
+                    
+                    foreach ($category_ratings as $category_id => $points) {
+                        if ($points !== '') {
+                            $stmt->execute([$rating_id, (int)$category_id, (float)$points]);
+                        }
+                    }
+                }
+                
+                $db->commit();
+                $_SESSION['flash_message'] = 'Bewertung erfolgreich gespeichert.';
+                $_SESSION['flash_type'] = 'success';
+                
+                // Redirect je nach Button
+                $redirect_url = $_SERVER['PHP_SELF'] . '?page=bewerten';
+                if (isset($_POST['save_and_close'])) {
+                    // Zurück zur Übersicht
+                } else {
+                    // Auf der Bewertungsseite bleiben
+                    $redirect_url .= '&rate=' . $student_id . '&group=' . $group_id . '&tab=rating';
+                }
+                
+                header('Location: ' . $redirect_url);
+                exit();
+                
+                break;
+                
+            case 'save_strengths':
+                $student_id = (int)$_POST['student_id'];
+                $group_id = (int)$_POST['group_id'];
+                $strength_items = $_POST['strength_items'] ?? [];
+                
+                // Berechtigung prüfen
+                $stmt = $db->prepare("
+                    SELECT COUNT(*) FROM group_students 
+                    WHERE student_id = ? AND group_id = ? AND examiner_teacher_id = ?
+                ");
+                $stmt->execute([$student_id, $group_id, $teacher_id]);
+                if (!$stmt->fetchColumn()) {
+                    throw new Exception('Keine Berechtigung für diese Aktion.');
+                }
+                
+                $db->beginTransaction();
+                
+                // Prüfen ob bereits eine Bewertung existiert
+                $stmt = $db->prepare("
+                    SELECT id FROM ratings 
+                    WHERE student_id = ? AND group_id = ? AND teacher_id = ?
+                ");
+                $stmt->execute([$student_id, $group_id, $teacher_id]);
+                $rating_id = $stmt->fetchColumn();
+                
+                if (!$rating_id) {
+                    // Bewertung muss existieren bevor Stärken gespeichert werden können
+                    throw new Exception('Bitte speichern Sie zuerst die Bewertung.');
+                }
+                
+                // Alte Stärken löschen
+                $stmt = $db->prepare("DELETE FROM rating_strengths WHERE rating_id = ?");
+                $stmt->execute([$rating_id]);
+                
+                // Neue Stärken speichern
+                if (!empty($strength_items)) {
+                    $stmt = $db->prepare("
+                        INSERT INTO rating_strengths (rating_id, strength_item_id)
+                        VALUES (?, ?)
+                    ");
+                    
+                    foreach ($strength_items as $item_id) {
+                        $stmt->execute([$rating_id, (int)$item_id]);
+                    }
+                }
+                
+                $db->commit();
+                $_SESSION['flash_message'] = 'Stärken erfolgreich gespeichert.';
+                $_SESSION['flash_type'] = 'success';
+                
+                // Redirect je nach Button
+                $redirect_url = $_SERVER['PHP_SELF'] . '?page=bewerten';
+                if (isset($_POST['save_and_close'])) {
+                    // Zurück zur Übersicht
+                } else {
+                    // Auf der Stärken-Seite bleiben
+                    $redirect_url .= '&rate=' . $student_id . '&group=' . $group_id . '&tab=strengths';
+                }
+                
+                header('Location: ' . $redirect_url);
+                exit();
+                
+                break;
+        }
+        
+    } catch (Exception $e) {
+        if (isset($db) && $db->inTransaction()) {
+            $db->rollBack();
+        }
+        $_SESSION['flash_message'] = $e->getMessage();
+        $_SESSION['flash_type'] = 'error';
+        
+        // Bei Fehler auch redirect mit allen Parametern
+        $redirect_url = $_SERVER['PHP_SELF'] . '?page=bewerten';
+        if (isset($student_id) && isset($group_id)) {
+            $redirect_url .= '&rate=' . $student_id . '&group=' . $group_id;
+            if (isset($_POST['form_action']) && $_POST['form_action'] === 'save_strengths') {
+                $redirect_url .= '&tab=strengths';
+            }
+        }
+        
+        header('Location: ' . $redirect_url);
+        exit();
+    }
+}
+
+
+// === BEWERTEN-FORMULARVERARBEITUNG (VOR HTML-AUSGABE!) ===
+// Dieser Code muss in dashboard.php VOR der HTML-Ausgabe eingefügt werden
+// Am besten nach den anderen Formularverarbeitungen (z.B. nach Themen/Gruppen)
+
+// WICHTIG: Stelle sicher, dass $db verfügbar ist
+if (!isset($db)) {
+    $db = getDB();
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form_action']) && isset($_GET['page']) && $_GET['page'] === 'bewerten') {
+    try {
+        // CSRF-Token prüfen
+        if (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
+            throw new Exception('Ungültiger CSRF-Token');
+        }
+        
+        switch ($_POST['form_action']) {
+            case 'save_rating':
+                $student_id = (int)$_POST['student_id'];
+                $group_id = (int)$_POST['group_id'];
+                $template_id = (int)$_POST['template_id'];
+                $final_grade = isset($_POST['final_grade']) && $_POST['final_grade'] !== '' ? (float)$_POST['final_grade'] : null;
+                $category_ratings = $_POST['category_rating'] ?? [];
+                
+                // Berechtigung prüfen
+                $stmt = $db->prepare("
+                    SELECT COUNT(*) FROM group_students 
+                    WHERE student_id = ? AND group_id = ? AND examiner_teacher_id = ?
+                ");
+                $stmt->execute([$student_id, $group_id, $teacher_id]);
+                if (!$stmt->fetchColumn()) {
+                    throw new Exception('Keine Berechtigung für diese Aktion.');
+                }
+                
+                $db->beginTransaction();
+                
+                // Prüfen ob bereits eine Bewertung existiert
+                $stmt = $db->prepare("
+                    SELECT id FROM ratings 
+                    WHERE student_id = ? AND group_id = ? AND teacher_id = ?
+                ");
+                $stmt->execute([$student_id, $group_id, $teacher_id]);
+                $rating_id = $stmt->fetchColumn();
+                
+                if ($rating_id) {
+                    // Update bestehende Bewertung
+                    $stmt = $db->prepare("
+                        UPDATE ratings 
+                        SET template_id = ?, final_grade = ?, is_complete = ?, 
+                            rating_date = CURDATE(), updated_at = NOW()
+                        WHERE id = ?
+                    ");
+                    $is_complete = !empty($category_ratings) && $final_grade !== null ? 1 : 0;
+                    $stmt->execute([$template_id, $final_grade, $is_complete, $rating_id]);
+                } else {
+                    // Neue Bewertung erstellen - WICHTIG: criteria_id mit Standardwert setzen
+                    $stmt = $db->prepare("
+                        INSERT INTO ratings (student_id, teacher_id, group_id, template_id, 
+                                           final_grade, is_complete, rating_date, created_at, criteria_id, points)
+                        VALUES (?, ?, ?, ?, ?, ?, CURDATE(), NOW(), 1, 0)
+                    ");
+                    $is_complete = !empty($category_ratings) && $final_grade !== null ? 1 : 0;
+                    $stmt->execute([$student_id, $teacher_id, $group_id, $template_id, 
+                                  $final_grade, $is_complete]);
+                    $rating_id = $db->lastInsertId();
+                }
+                
+                // Alte Kategorie-Bewertungen löschen
+                $stmt = $db->prepare("DELETE FROM rating_categories WHERE rating_id = ?");
+                $stmt->execute([$rating_id]);
+                
+                // Neue Kategorie-Bewertungen speichern
+                if (!empty($category_ratings)) {
+                    $stmt = $db->prepare("
+                        INSERT INTO rating_categories (rating_id, category_id, points)
+                        VALUES (?, ?, ?)
+                    ");
+                    
+                    foreach ($category_ratings as $category_id => $points) {
+                        if ($points !== '') {
+                            $stmt->execute([$rating_id, (int)$category_id, (float)$points]);
+                        }
+                    }
+                }
+                
+                $db->commit();
+                $_SESSION['flash_message'] = 'Bewertung erfolgreich gespeichert.';
+                $_SESSION['flash_type'] = 'success';
+                
+                // Redirect je nach Button
+                $redirect_url = $_SERVER['PHP_SELF'] . '?page=bewerten';
+                if (isset($_POST['save_and_close'])) {
+                    // Zurück zur Übersicht
+                } else {
+                    // Auf der Bewertungsseite bleiben
+                    $redirect_url .= '&rate=' . $student_id . '&group=' . $group_id . '&tab=rating';
+                }
+                
+                header('Location: ' . $redirect_url);
+                exit();
+                
+                break;
+                
+            case 'save_strengths':
+                $student_id = (int)$_POST['student_id'];
+                $group_id = (int)$_POST['group_id'];
+                $strength_items = $_POST['strength_items'] ?? [];
+                
+                // Berechtigung prüfen
+                $stmt = $db->prepare("
+                    SELECT COUNT(*) FROM group_students 
+                    WHERE student_id = ? AND group_id = ? AND examiner_teacher_id = ?
+                ");
+                $stmt->execute([$student_id, $group_id, $teacher_id]);
+                if (!$stmt->fetchColumn()) {
+                    throw new Exception('Keine Berechtigung für diese Aktion.');
+                }
+                
+                $db->beginTransaction();
+                
+                // Prüfen ob bereits eine Bewertung existiert
+                $stmt = $db->prepare("
+                    SELECT id FROM ratings 
+                    WHERE student_id = ? AND group_id = ? AND teacher_id = ?
+                ");
+                $stmt->execute([$student_id, $group_id, $teacher_id]);
+                $rating_id = $stmt->fetchColumn();
+                
+                if (!$rating_id) {
+                    // Bewertung muss existieren bevor Stärken gespeichert werden können
+                    throw new Exception('Bitte speichern Sie zuerst die Bewertung.');
+                }
+                
+                // Alte Stärken löschen
+                $stmt = $db->prepare("DELETE FROM rating_strengths WHERE rating_id = ?");
+                $stmt->execute([$rating_id]);
+                
+                // Neue Stärken speichern
+                if (!empty($strength_items)) {
+                    $stmt = $db->prepare("
+                        INSERT INTO rating_strengths (rating_id, strength_item_id)
+                        VALUES (?, ?)
+                    ");
+                    
+                    foreach ($strength_items as $item_id) {
+                        $stmt->execute([$rating_id, (int)$item_id]);
+                    }
+                }
+                
+                $db->commit();
+                $_SESSION['flash_message'] = 'Stärken erfolgreich gespeichert.';
+                $_SESSION['flash_type'] = 'success';
+                
+                // Redirect je nach Button
+                $redirect_url = $_SERVER['PHP_SELF'] . '?page=bewerten';
+                if (isset($_POST['save_and_close'])) {
+                    // Zurück zur Übersicht - Filter und Sort beibehalten
+                    if (isset($_GET['status'])) $redirect_url .= '&status=' . $_GET['status'];
+                    if (isset($_GET['sort'])) $redirect_url .= '&sort=' . $_GET['sort'];
+                } else {
+                    // Auf der Stärken-Seite bleiben
+                    $redirect_url .= '&rate=' . $student_id . '&group=' . $group_id . '&tab=strengths';
+                }
+                
+                header('Location: ' . $redirect_url);
+                exit();
+                
+                break;
+        }
+        
+    } catch (Exception $e) {
+        if (isset($db) && $db->inTransaction()) {
+            $db->rollBack();
+        }
+        $_SESSION['flash_message'] = $e->getMessage();
+        $_SESSION['flash_type'] = 'error';
+        
+        // Bei Fehler auch redirect mit allen Parametern
+        $redirect_url = $_SERVER['PHP_SELF'] . '?page=bewerten';
+        if (isset($student_id) && isset($group_id)) {
+            $redirect_url .= '&rate=' . $student_id . '&group=' . $group_id;
+            if (isset($_POST['form_action']) && $_POST['form_action'] === 'save_strengths') {
+                $redirect_url .= '&tab=strengths';
+            }
+        }
+        
+        header('Location: ' . $redirect_url);
+        exit();
+    }
+}
+
+
 ?>
 <!DOCTYPE html>
 <html lang="de">
@@ -910,16 +1593,18 @@ if (!$teacher) {
                     break;
                     
                 case 'bewerten':
-                    echo '<h2 style="text-align: center; color: #002b45; margin-bottom: 30px;">⭐ Schüler bewerten</h2>';
-                    echo '<p style="text-align: center; margin-bottom: 30px; color: #666;">Bewerten Sie Ihre Schüler anhand der definierten Kriterien und Themen.</p>';
-                    
-                    echo '<div class="content-section">';
-                    echo '<div class="empty-state">';
-                    echo '<span class="empty-state-icon">⭐</span>';
-                    echo '<h3>Bewertungssystem in Vorbereitung</h3>';
-                    echo '<p>Das Bewertungsmodul wird nach der Erstellung von Themen und Gruppen verfügbar sein.</p>';
-                    echo '</div>';
-                    echo '</div>';
+                    // Bewerten-Modul einbinden
+                    if (file_exists('lehrer_bewerten_include.php')) {
+                        include 'lehrer_bewerten_include.php';
+                    } else {
+                        echo '<div class="content-section">';
+                        echo '<div class="empty-state">';
+                        echo '<span class="empty-state-icon">⚠️</span>';
+                        echo '<h3>Bewerten-Modul nicht gefunden</h3>';
+                        echo '<p>Die Datei lehrer_bewerten_include.php konnte nicht geladen werden.</p>';
+                        echo '</div>';
+                        echo '</div>';
+                    }
                     break;
 
                 case 'vorlagen':
