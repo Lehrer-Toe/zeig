@@ -1258,6 +1258,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form_action']) && iss
     }
 }
 
+// === EINSTELLUNGEN-FORMULARVERARBEITUNG (VOR HTML-AUSGABE!) ===
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'change_password' && $page === 'einstellungen') {
+    $new_password = $_POST['new_password'] ?? '';
+    $confirm_password = $_POST['confirm_password'] ?? '';
+    
+    // Validierung
+    $errors = [];
+    
+    if (strlen($new_password) < 8) {
+        $errors[] = "Das Passwort muss mindestens 8 Zeichen lang sein.";
+    }
+    
+    if (!preg_match('/[A-Z]/', $new_password)) {
+        $errors[] = "Das Passwort muss mindestens einen Großbuchstaben enthalten.";
+    }
+    
+    if (!preg_match('/[^a-zA-Z0-9]/', $new_password)) {
+        $errors[] = "Das Passwort muss mindestens ein Sonderzeichen enthalten.";
+    }
+    
+    if ($new_password !== $confirm_password) {
+        $errors[] = "Die Passwörter stimmen nicht überein.";
+    }
+    
+    if (empty($errors)) {
+        $hashed_password = password_hash($new_password, PASSWORD_DEFAULT);
+        
+        $stmt = $db->prepare("UPDATE users SET password_hash = ?, first_login = 0, password_set_by_admin = 0, admin_password = NULL WHERE id = ?");
+        if ($stmt->execute([$hashed_password, $teacher_id])) {
+            $_SESSION['flash_message'] = 'Passwort erfolgreich geändert!';
+            $_SESSION['flash_type'] = 'success';
+        } else {
+            $_SESSION['flash_message'] = "Fehler beim Speichern des Passworts.";
+            $_SESSION['flash_type'] = 'error';
+        }
+    } else {
+        $_SESSION['flash_message'] = implode("<br>", $errors);
+        $_SESSION['flash_type'] = 'error';
+    }
+    
+    header('Location: ?page=einstellungen');
+    exit;
+}
 
 ?>
 <!DOCTYPE html>
@@ -1531,7 +1574,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form_action']) && iss
             <a href="?page=gruppen" class="nav-tab <?= $page === 'gruppen' ? 'active' : '' ?>">👥 Gruppen verwalten</a>
             <a href="?page=bewerten" class="nav-tab <?= $page === 'bewerten' ? 'active' : '' ?>">⭐ Schüler bewerten</a>
             <a href="?page=vorlagen" class="nav-tab <?= $page === 'vorlagen' ? 'active' : '' ?>">📋 Bewertungsvorlagen</a>
-            <a href="?page=uebersicht" class="nav-tab <?= $page === 'uebersicht' ? 'active' : '' ?>">📊 Übersicht</a>
             <a href="?page=einstellungen" class="nav-tab <?= $page === 'einstellungen' ? 'active' : '' ?>">⚙️ Einstellungen</a>
         </div>
 
@@ -1622,31 +1664,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form_action']) && iss
                     }
                     break;
 
-                case 'uebersicht':
-                    echo '<h2 style="text-align: center; color: #002b45; margin-bottom: 30px;">📊 Übersicht</h2>';
-                    echo '<p style="text-align: center; margin-bottom: 30px; color: #666;">Statistische Auswertungen und Berichte zu Ihren Bewertungen.</p>';
-                    
-                    echo '<div class="content-section">';
-                    echo '<div class="empty-state">';
-                    echo '<span class="empty-state-icon">📊</span>';
-                    echo '<h3>Statistiken werden erstellt</h3>';
-                    echo '<p>Nach den ersten Bewertungen werden hier detaillierte Auswertungen angezeigt.</p>';
-                    echo '</div>';
-                    echo '</div>';
-                    break;
-
-                case 'einstellungen':
-                    echo '<h2 style="text-align: center; color: #002b45; margin-bottom: 30px;">⚙️ Einstellungen</h2>';
-                    echo '<p style="text-align: center; margin-bottom: 30px; color: #666;">Persönliche Einstellungen und Präferenzen anpassen.</p>';
-                    
-                    echo '<div class="content-section">';
-                    echo '<div class="empty-state">';
-                    echo '<span class="empty-state-icon">⚙️</span>';
-                    echo '<h3>Einstellungen in Vorbereitung</h3>';
-                    echo '<p>Hier können Sie bald Ihre persönlichen Präferenzen anpassen.</p>';
-                    echo '</div>';
-                    echo '</div>';
-                    break;
+case 'einstellungen':
+    // Einstellungen-Modul einbinden
+    if (file_exists('lehrer_einstellungen_include.php')) {
+        include 'lehrer_einstellungen_include.php';
+    } else {
+        echo '<div class="content-section">';
+        echo '<div class="empty-state">';
+        echo '<span class="empty-state-icon">⚠️</span>';
+        echo '<h3>Einstellungen-Modul nicht gefunden</h3>';
+        echo '<p>Die Datei lehrer_einstellungen_include.php konnte nicht geladen werden.</p>';
+        echo '</div>';
+        echo '</div>';
+    }
+    break;
 
                 default:
                     echo '<div class="content-section">';
