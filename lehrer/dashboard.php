@@ -162,6 +162,205 @@ if ($page === 'themen' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST[
     }
 }
 
+// === GRUPPEN-FORMULARVERARBEITUNG (VOR HTML-AUSGABE!) ===
+if ($page === 'gruppen' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form_action'])) {
+    $db = getDB();
+    $school_id = $_SESSION['school_id'];
+    
+    try {
+        // CSRF-Token prüfen
+        if (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
+            throw new Exception('Ungültiger CSRF-Token');
+        }
+        
+        // Berechtigung prüfen für Erstellen/Bearbeiten
+        if (in_array($_POST['form_action'], ['create_group', 'update_group', 'delete_group'])) {
+            $stmt = $db->prepare("SELECT can_create_groups FROM users WHERE id = ?");
+            $stmt->execute([$teacher_id]);
+            if (!$stmt->fetchColumn()) {
+                throw new Exception('Sie haben keine Berechtigung, Gruppen zu verwalten.');
+            }
+        }
+        
+        switch ($_POST['form_action']) {
+            case 'create_group':
+                $topic = trim($_POST['topic'] ?? '');
+                $class_id = (int)($_POST['class_id'] ?? 0);
+                $student_ids = $_POST['students'] ?? [];
+                $examiners = $_POST['examiner'] ?? [];
+                $subjects = $_POST['subject'] ?? [];
+                
+                if (empty($topic)) {
+                    throw new Exception('Thema ist erforderlich.');
+                }
+                
+                if ($class_id <= 0) {
+                    throw new Exception('Bitte wählen Sie eine Klasse aus.');
+                }
+                
+                if (empty($student_ids)) {
+                    throw new Exception('Bitte wählen Sie mindestens einen Schüler aus.');
+                }
+                
+                if (count($student_ids) > 4) {
+                    throw new Exception('Maximal 4 Schüler pro Gruppe erlaubt.');
+                }
+                
+                $db->beginTransaction();
+                
+                // Prüfe ob Schüler bereits in Gruppen sind
+                $placeholders = str_repeat('?,', count($student_ids) - 1) . '?';
+                $stmt = $db->prepare("
+                    SELECT s.id, s.first_name, s.last_name
+                    FROM students s
+                    JOIN group_students gs ON s.id = gs.student_id
+                    WHERE s.id IN ($placeholders)
+                ");
+                $stmt->execute($student_ids);
+                $already_in_group = $stmt->fetchAll();
+                
+                if (!empty($already_in_group)) {
+                    $names = array_map(function($s) {
+                        return $s['first_name'] . ' ' . $s['last_name'];
+                    }, $already_in_group);
+                    throw new Exception('Folgende Schüler sind bereits in Gruppen: ' . implode(', ', $names));
+                }
+                
+                // Gruppe erstellen
+                $stmt = $db->prepare("
+                    INSERT INTO groups (school_id, class_id, name, teacher_id, created_at, updated_at) 
+                    VALUES (?, ?, ?, ?, NOW(), NOW())
+                ");
+                $stmt->execute([$school_id, $class_id, $topic, $teacher_id]);
+                $group_id = $db->lastInsertId();
+                
+                // Schüler zuordnen
+                $stmt = $db->prepare("
+                    INSERT INTO group_students (group_id, student_id, assigned_by, examiner_teacher_id, subject_id, assigned_at) 
+                    VALUES (?, ?, ?, ?, ?, NOW())
+                ");
+                
+                foreach ($student_ids as $student_id) {
+                    $examiner_id = isset($examiners[$student_id]) && $examiners[$student_id] ? $examiners[$student_id] : null;
+                    $subject_id = isset($subjects[$student_id]) && $subjects[$student_id] ? $subjects[$student_id] : null;
+                    $stmt->execute([$group_id, $student_id, $teacher_id, $examiner_id, $subject_id]);
+                }
+                
+                // Letzte ausgewählte Klasse speichern
+                $stmt = $db->prepare("UPDATE users SET last_selected_class_id = ? WHERE id = ?");
+                $stmt->execute([$class_id, $teacher_id]);
+                
+                $db->commit();
+                $_SESSION['flash_message'] = 'Gruppe erfolgreich erstellt.';
+                $_SESSION['flash_type'] = 'success';
+                break;
+                
+            case 'update_group':
+                $group_id = (int)($_POST['group_id'] ?? 0);
+                $topic = trim($_POST['topic'] ?? '');
+                $examiners = $_POST['examiner'] ?? [];
+                $subjects = $_POST['subject'] ?? [];
+                
+                if ($group_id <= 0) {
+                    throw new Exception('Ungültige Gruppen-ID.');
+                }
+                
+                if (empty($topic)) {
+                    throw new Exception('Thema ist erforderlich.');
+                }
+                
+                // Prüfen ob Gruppe dem Lehrer gehört
+                $stmt = $db->prepare("SELECT id FROM groups WHERE id = ? AND teacher_id = ? AND school_id = ? AND is_active = 1");
+                $stmt->execute([$group_id, $teacher_id, $school_id]);
+                if (!$stmt->fetch()) {
+                    throw new Exception('Gruppe nicht gefunden oder keine Berechtigung.');
+                }
+                
+                $db->beginTransaction();
+                
+                // Gruppe aktualisieren
+                $stmt = $db->prepare("UPDATE groups SET name = ?, updated_at = NOW() WHERE id = ?");
+                $stmt->execute([$topic, $group_id]);
+                
+                // Schüler-Zuordnungen aktualisieren
+                foreach ($examiners as $student_id => $examiner_id) {
+                    $subject_id = isset($subjects[$student_id]) && $subjects[$student_id] ? $subjects[$student_id] : null;
+                    $examiner_id = $examiner_id ? $examiner_id : null;
+                    
+                    $stmt = $db->prepare("
+                        UPDATE group_students 
+                        SET examiner_teacher_id = ?, subject_id = ?
+                        WHERE group_id = ? AND student_id = ?
+                    ");
+                    $stmt->execute([$examiner_id, $subject_id, $group_id, $student_id]);
+                }
+                
+                $db->commit();
+                $_SESSION['flash_message'] = 'Gruppe erfolgreich aktualisiert.';
+                $_SESSION['flash_type'] = 'success';
+                break;
+                
+            case 'remove_student':
+                $group_id = (int)($_POST['group_id'] ?? 0);
+                $student_id = (int)($_POST['student_id'] ?? 0);
+                
+                if ($group_id <= 0 || $student_id <= 0) {
+                    throw new Exception('Ungültige IDs.');
+                }
+                
+                // Prüfen ob Gruppe dem Lehrer gehört
+                $stmt = $db->prepare("SELECT id FROM groups WHERE id = ? AND teacher_id = ? AND school_id = ? AND is_active = 1");
+                $stmt->execute([$group_id, $teacher_id, $school_id]);
+                if (!$stmt->fetch()) {
+                    throw new Exception('Gruppe nicht gefunden oder keine Berechtigung.');
+                }
+                
+                // Schüler entfernen
+                $stmt = $db->prepare("DELETE FROM group_students WHERE group_id = ? AND student_id = ?");
+                $stmt->execute([$group_id, $student_id]);
+                
+                $_SESSION['flash_message'] = 'Schüler erfolgreich aus der Gruppe entfernt.';
+                $_SESSION['flash_type'] = 'success';
+                break;
+                
+            case 'delete_group':
+                $group_id = (int)($_POST['group_id'] ?? 0);
+                
+                if ($group_id <= 0) {
+                    throw new Exception('Ungültige Gruppen-ID.');
+                }
+                
+                // Prüfen ob Gruppe dem Lehrer gehört
+                $stmt = $db->prepare("SELECT name FROM groups WHERE id = ? AND teacher_id = ? AND school_id = ? AND is_active = 1");
+                $stmt->execute([$group_id, $teacher_id, $school_id]);
+                $group = $stmt->fetch();
+                if (!$group) {
+                    throw new Exception('Gruppe nicht gefunden oder keine Berechtigung.');
+                }
+                
+                // Soft delete
+                $stmt = $db->prepare("UPDATE groups SET is_active = 0, updated_at = NOW() WHERE id = ?");
+                $stmt->execute([$group_id]);
+                
+                $_SESSION['flash_message'] = "Gruppe '{$group['name']}' erfolgreich gelöscht.";
+                $_SESSION['flash_type'] = 'success';
+                break;
+        }
+        
+        header('Location: ' . $_SERVER['PHP_SELF'] . '?page=gruppen');
+        exit();
+        
+    } catch (Exception $e) {
+        if (isset($db) && $db->inTransaction()) {
+            $db->rollBack();
+        }
+        $_SESSION['flash_message'] = $e->getMessage();
+        $_SESSION['flash_type'] = 'error';
+        header('Location: ' . $_SERVER['PHP_SELF'] . '?page=gruppen');
+        exit();
+    }
+}
+
 // Lehrerdaten und Schulinfo abrufen
 $db = getDB();
 $stmt = $db->prepare("
@@ -175,6 +374,43 @@ $teacher = $stmt->fetch();
 
 if (!$teacher) {
     die('Lehrerdaten konnten nicht geladen werden.');
+}
+
+// can_create_groups in Session speichern für Include-Dateien
+$_SESSION['can_create_groups'] = $teacher['can_create_groups'];
+
+// AJAX-Handler für Schüler-Abruf
+if (isset($_GET['action']) && $_GET['action'] === 'get_students' && isset($_GET['class_id'])) {
+    $class_id = (int)$_GET['class_id'];
+    if ($class_id > 0) {
+        $stmt = $db->prepare("
+            SELECT s.*, 
+                   CASE WHEN gs.id IS NOT NULL THEN 1 ELSE 0 END as has_group
+            FROM students s
+            LEFT JOIN group_students gs ON s.id = gs.student_id
+            WHERE s.class_id = ? AND s.is_active = 1
+            ORDER BY s.last_name, s.first_name
+        ");
+        $stmt->execute([$class_id]);
+        $students = $stmt->fetchAll();
+        
+        foreach ($students as $student) {
+            $isDisabled = $student['has_group'] ? 'disabled' : '';
+            $name = htmlspecialchars($student['first_name'] . ' ' . $student['last_name']);
+            echo <<<HTML
+                <label class="student-checkbox {$isDisabled}">
+                    <input type="checkbox" name="students[]" value="{$student['id']}" 
+                        onchange="toggleStudent({$student['id']}, '{$name}')" 
+                        {$isDisabled}>
+                    <span>{$name}</span>
+HTML;
+            if ($student['has_group']) {
+                echo '<small style="color: #999;"> (bereits in Gruppe)</small>';
+            }
+            echo '</label>';
+        }
+    }
+    exit();
 }
 ?>
 <!DOCTYPE html>
@@ -495,20 +731,18 @@ if (!$teacher) {
                     break;
                     
                 case 'gruppen':
-                    echo '<h2 style="text-align: center; color: #002b45; margin-bottom: 30px;">👥 Gruppen verwalten</h2>';
-                    echo '<p style="text-align: center; margin-bottom: 30px; color: #666;">Erstellen und verwalten Sie Arbeitsgruppen für Ihre Klassen.</p>';
-                    
-                    echo '<div class="content-section">';
-                    echo '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">';
-                    echo '<h3>Aktive Gruppen</h3>';
-                    echo '<button class="action-button">+ Neue Gruppe</button>';
-                    echo '</div>';
-                    echo '<div class="empty-state">';
-                    echo '<span class="empty-state-icon">👥</span>';
-                    echo '<h3>Noch keine Gruppen erstellt</h3>';
-                    echo '<p>Erstellen Sie Arbeitsgruppen basierend auf Schülerstärken und Themen.</p>';
-                    echo '</div>';
-                    echo '</div>';
+                    // Gruppen-Modul einbinden
+                    if (file_exists('lehrer_gruppen_include.php')) {
+                        include 'lehrer_gruppen_include.php';
+                    } else {
+                        echo '<div class="content-section">';
+                        echo '<div class="empty-state">';
+                        echo '<span class="empty-state-icon">⚠️</span>';
+                        echo '<h3>Gruppen-Modul nicht gefunden</h3>';
+                        echo '<p>Die Datei lehrer_gruppen_include.php konnte nicht geladen werden.</p>';
+                        echo '</div>';
+                        echo '</div>';
+                    }
                     break;
                     
                 case 'bewerten':
