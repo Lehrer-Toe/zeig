@@ -15,6 +15,91 @@ function generateRandomColor() {
     return '#' . str_pad(dechex(mt_rand(0, 0xFFFFFF)), 6, '0', STR_PAD_LEFT);
 }
 
+// Vordefinierte Fächer pro Schulart
+function getPredefinedSubjects($schoolType) {
+    $subjects = [
+        'hauptschule' => [
+            // Pflichtfächer
+            ['short' => 'D', 'full' => 'Deutsch'],
+            ['short' => 'M', 'full' => 'Mathematik'],
+            ['short' => 'E', 'full' => 'Englisch'],
+            ['short' => 'BIO', 'full' => 'Biologie'],
+            ['short' => 'PH', 'full' => 'Physik'],
+            ['short' => 'CH', 'full' => 'Chemie'],
+            ['short' => 'G', 'full' => 'Geschichte'],
+            ['short' => 'GEO', 'full' => 'Geographie'],
+            ['short' => 'GK', 'full' => 'Gemeinschaftskunde'],
+            ['short' => 'WI', 'full' => 'Wirtschaft'],
+            ['short' => 'MU', 'full' => 'Musik'],
+            ['short' => 'BK', 'full' => 'Bildende Kunst'],
+            ['short' => 'SP', 'full' => 'Sport'],
+            ['short' => 'REL', 'full' => 'Religion'],
+            ['short' => 'ETH', 'full' => 'Ethik'],
+            ['short' => 'WBS', 'full' => 'Wirtschaft/Berufs- und Studienorientierung'],
+            // Wahlpflichtfächer
+            ['short' => 'T', 'full' => 'Technik'],
+            ['short' => 'AES', 'full' => 'Alltagskultur, Ernährung, Soziales'],
+            ['short' => 'F', 'full' => 'Französisch'],
+            ['short' => 'NuT', 'full' => 'Natur und Technik']
+        ],
+        'realschule' => [
+            // Pflichtfächer
+            ['short' => 'D', 'full' => 'Deutsch'],
+            ['short' => 'M', 'full' => 'Mathematik'],
+            ['short' => 'E', 'full' => 'Englisch'],
+            ['short' => 'BIO', 'full' => 'Biologie'],
+            ['short' => 'PH', 'full' => 'Physik'],
+            ['short' => 'CH', 'full' => 'Chemie'],
+            ['short' => 'EWG', 'full' => 'Erdkunde/Wirtschaftskunde/Gemeinschaftskunde'],
+            ['short' => 'G', 'full' => 'Geschichte'],
+            ['short' => 'MU', 'full' => 'Musik'],
+            ['short' => 'BK', 'full' => 'Bildende Kunst'],
+            ['short' => 'SP', 'full' => 'Sport'],
+            ['short' => 'REL', 'full' => 'Religionslehre'],
+            ['short' => 'ETH', 'full' => 'Ethik'],
+            ['short' => 'WBS', 'full' => 'Wirtschaft/Berufs- und Studienorientierung'],
+            ['short' => 'INF', 'full' => 'Informatik'],
+            // Wahlpflichtfächer
+            ['short' => 'T', 'full' => 'Technik'],
+            ['short' => 'AES', 'full' => 'Alltagskultur, Ernährung, Soziales'],
+            ['short' => 'MuM', 'full' => 'Mensch und Umwelt'],
+            ['short' => 'F', 'full' => 'Französisch'],
+            // Projekt
+            ['short' => 'ZWDK', 'full' => 'Projekt: Zeig, was du kannst!']
+        ],
+        'gemeinschaftsschule' => [
+            // Pflichtfächer
+            ['short' => 'D', 'full' => 'Deutsch'],
+            ['short' => 'M', 'full' => 'Mathematik'],
+            ['short' => 'E', 'full' => 'Englisch'],
+            ['short' => 'BIO', 'full' => 'Biologie'],
+            ['short' => 'PH', 'full' => 'Physik'],
+            ['short' => 'CH', 'full' => 'Chemie'],
+            ['short' => 'EWG', 'full' => 'Erdkunde/Wirtschaftskunde/Gemeinschaftskunde'],
+            ['short' => 'MU', 'full' => 'Musik'],
+            ['short' => 'BK', 'full' => 'Bildende Kunst'],
+            ['short' => 'SP', 'full' => 'Sport'],
+            ['short' => 'REL', 'full' => 'Religionslehre'],
+            ['short' => 'ETH', 'full' => 'Ethik'],
+            ['short' => 'WBS', 'full' => 'Wirtschaft/Berufs- und Studienorientierung'],
+            ['short' => 'IMB', 'full' => 'Informatik & Medienbildung'],
+            // Wahlpflichtfächer
+            ['short' => 'T', 'full' => 'Technik'],
+            ['short' => 'AES', 'full' => 'Alltagskultur, Ernährung, Soziales'],
+            ['short' => 'F', 'full' => 'Französisch'],
+            // Profilfächer
+            ['short' => 'NwT', 'full' => 'Naturwissenschaft und Technik'],
+            ['short' => 'IMP', 'full' => 'Informatik, Mathematik, Physik'],
+            ['short' => 'S', 'full' => 'Spanisch'],
+            // Projekte
+            ['short' => 'ZWDK', 'full' => 'Projekt: Zeig, was du kannst!'],
+            ['short' => 'E&V', 'full' => 'Projekt: Engagement & Verantwortung']
+        ]
+    ];
+    
+    return isset($subjects[$schoolType]) ? $subjects[$schoolType] : [];
+}
+
 // AJAX-Handler
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     header('Content-Type: application/json');
@@ -22,6 +107,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     
     try {
         switch ($_POST['action']) {
+            case 'import_predefined':
+                $schoolType = $_POST['school_type'] ?? '';
+                $subjects = getPredefinedSubjects($schoolType);
+                $imported = 0;
+                $skipped = 0;
+                
+                foreach ($subjects as $subject) {
+                    // Prüfen ob Fach bereits existiert
+                    $check = $db->prepare("SELECT id FROM subjects WHERE school_id = ? AND short_name = ?");
+                    $check->execute([$school_id, $subject['short']]);
+                    
+                    if (!$check->fetch()) {
+                        $stmt = $db->prepare("INSERT INTO subjects (school_id, short_name, full_name, color) VALUES (?, ?, ?, ?)");
+                        $stmt->execute([$school_id, $subject['short'], $subject['full'], generateRandomColor()]);
+                        $imported++;
+                    } else {
+                        $skipped++;
+                    }
+                }
+                
+                $response = [
+                    'success' => true, 
+                    'message' => "$imported Fächer importiert" . ($skipped > 0 ? ", $skipped übersprungen (bereits vorhanden)" : ""),
+                    'reload' => true
+                ];
+                break;
+                
             case 'add':
                 $short_name = trim($_POST['short_name'] ?? '');
                 $full_name = trim($_POST['full_name'] ?? '');
@@ -176,8 +288,12 @@ try {
         .form-row { display: flex; gap: 1rem; align-items: end; flex-wrap: wrap; }
         .form-group { display: flex; flex-direction: column; min-width: 150px; flex: 1; }
         .form-group label { margin-bottom: 0.25rem; font-size: 0.9rem; color: #cbd5e1; }
-        .form-group input { padding: 0.5rem; background: rgba(0,0,0,0.3); border: 1px solid rgba(100,116,139,0.3); border-radius: 0.25rem; color: #e2e8f0; }
-        .form-group input:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59,130,246,0.2); }
+        .form-group input, .form-group select { padding: 0.5rem; background: rgba(0,0,0,0.3); border: 1px solid rgba(100,116,139,0.3); border-radius: 0.25rem; color: #e2e8f0; }
+        .form-group input:focus, .form-group select:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59,130,246,0.2); }
+        
+        .import-form { background: rgba(59,130,246,0.1); border: 1px solid rgba(59,130,246,0.3); padding: 1.5rem; border-radius: 0.5rem; margin-bottom: 2rem; }
+        .import-form h2 { color: #60a5fa; margin-bottom: 1rem; }
+        .import-form .info { font-size: 0.9rem; opacity: 0.8; margin-bottom: 1rem; }
         
         @media (max-width: 768px) {
             .container { padding: 1rem; }
@@ -211,6 +327,28 @@ try {
         <div class="alert alert-danger" style="display: block;">
             <strong>⚠️ Hinweis:</strong> Die Fächer-Tabelle existiert noch nicht. 
             Bitte führen Sie die Migration aus: <code>php migrate_subjects.php</code>
+        </div>
+        <?php endif; ?>
+        
+        <?php if (empty($subjects)): ?>
+        <div class="import-form">
+            <h2>🎓 Fächer aus Vorlage importieren</h2>
+            <p class="info">Wählen Sie eine Schulart aus, um die entsprechenden Fächer zu importieren, oder wählen Sie "Leer" um eigene Fächer anzulegen.</p>
+            <form id="importForm" onsubmit="importPredefined(event)">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Schulart</label>
+                        <select name="school_type" required>
+                            <option value="">-- Bitte wählen --</option>
+                            <option value="hauptschule">Hauptschule / Werkrealschule</option>
+                            <option value="realschule">Realschule</option>
+                            <option value="gemeinschaftsschule">Gemeinschaftsschule</option>
+                            <option value="leer">Leer (eigene Fächer anlegen)</option>
+                        </select>
+                    </div>
+                    <button type="submit" class="btn btn-primary">📥 Fächer importieren</button>
+                </div>
+            </form>
         </div>
         <?php endif; ?>
         
@@ -266,6 +404,31 @@ try {
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                 body: new URLSearchParams(data)
             }).then(r => r.json());
+        }
+        
+        function importPredefined(event) {
+            event.preventDefault();
+            const formData = new FormData(event.target);
+            const schoolType = formData.get('school_type');
+            
+            if (schoolType === 'leer') {
+                // Bei "Leer" keine Fächer importieren
+                document.querySelector('.import-form').style.display = 'none';
+                showAlert('Sie können nun eigene Fächer anlegen.', 'success');
+                return;
+            }
+            
+            apiCall('import_predefined', { school_type: schoolType })
+            .then(data => {
+                if (data.success) {
+                    showAlert(data.message);
+                    if (data.reload) {
+                        setTimeout(() => window.location.reload(), 1000);
+                    }
+                } else {
+                    showAlert(data.message, 'danger');
+                }
+            });
         }
         
         function editSubject(id) {
@@ -360,6 +523,12 @@ try {
                     `;
                     grid.appendChild(newItem);
                     event.target.reset();
+                    
+                    // Import-Form ausblenden wenn erstes Fach hinzugefügt wurde
+                    const importForm = document.querySelector('.import-form');
+                    if (importForm) {
+                        importForm.style.display = 'none';
+                    }
                 } else {
                     showAlert(data.message, 'danger');
                 }
