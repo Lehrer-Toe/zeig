@@ -4,7 +4,15 @@
 
 // Wichtige Variablen aus dashboard.php verfügbar machen
 $school_id = $_SESSION['school_id'] ?? null;
-$can_create_groups = $_SESSION['can_create_groups'] ?? 0;
+
+// WICHTIG: can_create_groups direkt aus der Datenbank laden, nicht nur aus Session
+$stmt = $db->prepare("SELECT can_create_groups FROM users WHERE id = ? AND user_type = 'lehrer'");
+$stmt->execute([$teacher_id]);
+$result = $stmt->fetch();
+$can_create_groups = isset($result['can_create_groups']) ? (int)$result['can_create_groups'] : 0;
+
+// Session aktualisieren falls nötig
+$_SESSION['can_create_groups'] = $can_create_groups;
 
 // Flash-Messages verarbeiten
 $flash_message = null;
@@ -34,15 +42,23 @@ if (isset($_GET['edit']) && is_numeric($_GET['edit'])) {
     $edit_group = $stmt->fetch();
     
     if ($edit_group) {
-        // Schüler der Gruppe laden
+        // Schüler der Gruppe laden mit Bewertungsstatus
         $stmt = $db->prepare("
             SELECT gs.*, s.first_name, s.last_name, s.id as student_id,
                    et.name as examiner_name, subj.short_name as subject_short,
-                   subj.full_name as subject_full
+                   subj.full_name as subject_full, subj.color as subject_color,
+                   CASE 
+                       WHEN r.id IS NOT NULL AND r.is_complete = 1 THEN 1 
+                       ELSE 0 
+                   END as is_complete
             FROM group_students gs
             JOIN students s ON gs.student_id = s.id
             LEFT JOIN users et ON gs.examiner_teacher_id = et.id
             LEFT JOIN subjects subj ON gs.subject_id = subj.id
+            LEFT JOIN ratings r ON r.student_id = gs.student_id 
+                AND r.group_id = gs.group_id 
+                AND r.teacher_id = gs.examiner_teacher_id
+                AND r.is_complete = 1
             WHERE gs.group_id = ?
             ORDER BY s.last_name, s.first_name
         ");
@@ -50,7 +66,6 @@ if (isset($_GET['edit']) && is_numeric($_GET['edit'])) {
         $edit_group['students'] = $stmt->fetchAll();
     }
 }
-unset($edit_group); // Referenz aufheben falls vorhanden
 
 // Letzte ausgewählte Klasse des Lehrers abrufen (optional)
 $last_class_id = null;
@@ -63,9 +78,17 @@ try {
     $last_class_id = null;
 }
 
-// Klassen abrufen
+// Klassen abrufen mit Anzahl VERFÜGBARER Schüler
 $stmt = $db->prepare("
-    SELECT c.*, COUNT(s.id) as student_count
+    SELECT c.*, 
+           COUNT(DISTINCT CASE 
+               WHEN NOT EXISTS (
+                   SELECT 1 FROM group_students gs 
+                   JOIN groups g ON gs.group_id = g.id 
+                   WHERE gs.student_id = s.id AND g.is_active = 1
+               ) THEN s.id 
+           END) as available_students,
+           COUNT(s.id) as total_students
     FROM classes c
     LEFT JOIN students s ON c.id = s.class_id AND s.is_active = 1
     WHERE c.school_id = ? AND c.is_active = 1
@@ -96,7 +119,7 @@ $stmt = $db->prepare("
 $stmt->execute([$school_id]);
 $teachers = $stmt->fetchAll();
 
-// Fächer abrufen
+// Fächer abrufen mit Farben
 $stmt = $db->prepare("
     SELECT * FROM subjects 
     WHERE school_id = ? AND is_active = 1 
@@ -105,15 +128,18 @@ $stmt = $db->prepare("
 $stmt->execute([$school_id]);
 $subjects = $stmt->fetchAll();
 
-// Debug-Modus (kann bei Bedarf aktiviert werden)
-$debug_mode = false; // Setzen Sie auf true für Debug-Ausgaben
-
 // Gruppen abrufen (eigene und zugewiesene) - verbesserte Query ohne Duplikate
 $stmt = $db->prepare("
     SELECT g.*, t.title as topic_title, c.name as class_name,
            creator.name as creator_name,
            (SELECT COUNT(DISTINCT gs1.student_id) FROM group_students gs1 WHERE gs1.group_id = g.id) as student_count,
-           (SELECT COUNT(DISTINCT gs2.student_id) FROM group_students gs2 WHERE gs2.group_id = g.id AND gs2.is_examined = 1) as examined_count,
+           (SELECT COUNT(DISTINCT gs2.student_id) 
+            FROM group_students gs2 
+            JOIN ratings r ON r.student_id = gs2.student_id 
+                AND r.group_id = gs2.group_id 
+                AND r.teacher_id = gs2.examiner_teacher_id 
+                AND r.is_complete = 1
+            WHERE gs2.group_id = g.id) as examined_count,
            CASE 
                WHEN g.teacher_id = ? THEN 1
                WHEN EXISTS (SELECT 1 FROM group_students gs3 WHERE gs3.group_id = g.id AND gs3.examiner_teacher_id = ?) THEN 2
@@ -135,36 +161,32 @@ $stmt = $db->prepare("
 $stmt->execute([$teacher_id, $teacher_id, $school_id, $teacher_id, $teacher_id]);
 $groups = $stmt->fetchAll();
 
-// Sicherstellen, dass keine Duplikate vorhanden sind
-$unique_groups = [];
-$seen_ids = [];
-foreach ($groups as $group) {
-    if (!in_array($group['id'], $seen_ids)) {
-        $unique_groups[] = $group;
-        $seen_ids[] = $group['id'];
-    }
-}
-$groups = $unique_groups;
-
-// Für jede Gruppe die Schüler laden - Alternative ohne Referenz
-for ($i = 0; $i < count($groups); $i++) {
+// Für jede Gruppe die Schüler laden mit Bewertungsstatus und Fachfarben
+foreach ($groups as &$group) {
     $stmt = $db->prepare("
-        SELECT gs.*, s.first_name, s.last_name,
-               et.name as examiner_name, subj.short_name as subject_short
+        SELECT gs.*, s.first_name, s.last_name, 
+               et.name as examiner_name, 
+               subj.short_name as subject_short,
+               subj.full_name as subject_full,
+               subj.color as subject_color,
+               CASE 
+                   WHEN r.id IS NOT NULL AND r.is_complete = 1 THEN 1 
+                   ELSE 0 
+               END as is_complete
         FROM group_students gs
         JOIN students s ON gs.student_id = s.id
         LEFT JOIN users et ON gs.examiner_teacher_id = et.id
         LEFT JOIN subjects subj ON gs.subject_id = subj.id
+        LEFT JOIN ratings r ON r.student_id = gs.student_id 
+            AND r.group_id = gs.group_id 
+            AND r.teacher_id = gs.examiner_teacher_id
         WHERE gs.group_id = ?
         ORDER BY s.last_name, s.first_name
     ");
-    $stmt->execute([$groups[$i]['id']]);
-    $groups[$i]['students'] = $stmt->fetchAll();
-    
-    if ($debug_mode) {
-        error_log("Gruppe ID " . $groups[$i]['id'] . " hat " . count($groups[$i]['students']) . " Schüler");
-    }
+    $stmt->execute([$group['id']]);
+    $group['students'] = $stmt->fetchAll();
 }
+unset($group); // Referenz aufheben
 ?>
 
 <style>
@@ -174,8 +196,8 @@ for ($i = 0; $i < count($groups); $i++) {
     justify-content: space-between;
     align-items: center;
     margin-bottom: 30px;
-    padding: 20px;
     background: rgba(255, 255, 255, 0.9);
+    padding: 25px;
     border-radius: 15px;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
 }
@@ -189,13 +211,10 @@ for ($i = 0; $i < count($groups); $i++) {
     gap: 15px;
 }
 
-.permission-badge {
-    background: rgba(34, 197, 94, 0.1);
-    color: #15803d;
-    padding: 6px 12px;
-    border-radius: 20px;
-    font-size: 14px;
-    font-weight: 500;
+.groups-actions {
+    display: flex;
+    gap: 15px;
+    align-items: center;
 }
 
 .btn {
@@ -219,7 +238,7 @@ for ($i = 0; $i < count($groups); $i++) {
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
 }
 
-.btn-primary:hover {
+.btn-primary:hover:not(:disabled) {
     background: #ff9900;
     color: white;
     transform: translateY(-2px);
@@ -227,8 +246,24 @@ for ($i = 0; $i < count($groups); $i++) {
 }
 
 .btn-primary:disabled {
-    opacity: 0.5;
+    background: #e5e7eb;
+    color: #9ca3af;
+    border-color: #d1d5db;
     cursor: not-allowed;
+    transform: none;
+}
+
+.btn-print {
+    background: rgba(255, 255, 255, 0.9);
+    color: #002b45;
+    border: 2px solid rgba(0, 43, 69, 0.3);
+}
+
+.btn-print:hover {
+    background: #002b45;
+    color: white;
+    border-color: #002b45;
+    transform: translateY(-1px);
 }
 
 .btn-secondary {
@@ -243,20 +278,39 @@ for ($i = 0; $i < count($groups); $i++) {
 }
 
 .btn-danger {
-    background: rgba(231, 76, 60, 0.9);
+    background: #ef4444;
     color: white;
-    font-size: 12px;
-    padding: 8px 16px;
 }
 
 .btn-danger:hover {
-    background: #c0392b;
+    background: #dc2626;
     transform: translateY(-1px);
 }
 
 .groups-container {
-    display: grid;
-    gap: 25px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.empty-state {
+    text-align: center;
+    padding: 60px 40px;
+    color: #666;
+    background: rgba(255, 255, 255, 0.9);
+    border-radius: 15px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+}
+
+.empty-state-icon {
+    font-size: 72px;
+    margin-bottom: 20px;
+    opacity: 0.5;
+}
+
+.empty-state h3 {
+    color: #002b45;
+    margin: 20px 0;
 }
 
 .group-card {
@@ -311,17 +365,18 @@ for ($i = 0; $i < count($groups); $i++) {
     padding: 12px 16px;
     background: rgba(0, 43, 69, 0.05);
     border-radius: 10px;
-    border: 1px solid rgba(0, 43, 69, 0.1);
+    border: 2px solid rgba(0, 43, 69, 0.1);
+    transition: all 0.3s ease;
 }
 
-.student-item.examined {
+.student-item.completed {
     background: rgba(34, 197, 94, 0.05);
-    border-color: rgba(34, 197, 94, 0.2);
+    border-color: rgba(34, 197, 94, 0.3);
 }
 
-.student-item.not-examined {
-    background: rgba(231, 76, 60, 0.05);
-    border-color: rgba(231, 76, 60, 0.2);
+.student-item.not-completed {
+    background: rgba(239, 68, 68, 0.05);
+    border-color: rgba(239, 68, 68, 0.2);
 }
 
 .student-info {
@@ -342,17 +397,24 @@ for ($i = 0; $i < count($groups); $i++) {
 }
 
 .student-subject {
-    background: #007bff;
     color: white;
-    padding: 4px 8px;
+    padding: 4px 10px;
     border-radius: 6px;
     font-size: 11px;
     font-weight: 600;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
 }
 
-.examined-badge {
-    color: #15803d;
+.completion-badge {
     font-size: 20px;
+}
+
+.completion-badge.completed {
+    color: #22c55e;
+}
+
+.completion-badge.not-completed {
+    color: #ef4444;
 }
 
 .modal {
@@ -364,12 +426,12 @@ for ($i = 0; $i < count($groups); $i++) {
     height: 100%;
     background: rgba(0, 0, 0, 0.8);
     z-index: 1000;
+    overflow-y: auto;
+    padding: 20px 0;
 }
 
 .modal.show {
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    display: block;
 }
 
 .modal-content {
@@ -379,8 +441,8 @@ for ($i = 0; $i < count($groups); $i++) {
     padding: 30px;
     max-width: 900px;
     width: 90%;
-    max-height: 90vh;
-    overflow-y: auto;
+    margin: 20px auto;
+    backdrop-filter: blur(10px);
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
 }
 
@@ -441,78 +503,189 @@ for ($i = 0; $i < count($groups); $i++) {
     box-shadow: 0 0 0 3px rgba(255, 153, 0, 0.1);
 }
 
-.form-section {
-    background: rgba(0, 43, 69, 0.03);
-    padding: 20px;
-    border-radius: 12px;
-    margin-bottom: 20px;
-}
-
-.form-section-title {
-    font-size: 18px;
-    font-weight: 600;
-    color: #002b45;
-    margin-bottom: 15px;
-}
-
-.students-selection {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-    gap: 12px;
-    max-height: 300px;
-    overflow-y: auto;
-    padding: 15px;
-    background: rgba(255, 255, 255, 0.5);
-    border-radius: 10px;
-}
-
-.student-checkbox {
-    display: flex;
-    align-items: center;
-    padding: 12px;
-    background: rgba(255, 255, 255, 0.8);
-    border: 2px solid rgba(0, 43, 69, 0.2);
-    border-radius: 8px;
-    cursor: pointer;
-    transition: all 0.3s ease;
-}
-
-.student-checkbox:hover {
-    background: rgba(255, 255, 255, 0.95);
-    border-color: #ff9900;
-}
-
-.student-checkbox input {
-    margin-right: 8px;
-}
-
-.student-checkbox.disabled {
-    opacity: 0.5;
+.form-control:disabled {
+    background: rgba(156, 163, 175, 0.1);
     cursor: not-allowed;
 }
 
-.student-checkbox.disabled:hover {
-    background: rgba(255, 255, 255, 0.8);
-    border-color: rgba(0, 43, 69, 0.2);
+.form-hint {
+    font-size: 12px;
+    color: #666;
+    margin-top: 5px;
 }
 
-.assignment-grid {
+.student-selection {
+    background: rgba(255, 255, 255, 0.8);
+    border: 1px solid rgba(0, 43, 69, 0.2);
+    border-radius: 10px;
+    padding: 15px;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.students-grid {
     display: grid;
-    gap: 15px;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 10px;
+}
+
+.student-card-select {
+    position: relative;
+    background: rgba(255, 255, 255, 0.95);
+    border: 2px solid rgba(0, 43, 69, 0.2);
+    border-radius: 12px;
+    padding: 12px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    text-align: center;
+    min-height: 80px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 5px;
+}
+
+.student-card-select:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    border-color: #ff9900;
+    background: rgba(255, 153, 0, 0.05);
+}
+
+@keyframes selectPulse {
+    0% {
+        transform: scale(1.05);
+    }
+    50% {
+        transform: scale(1.1);
+    }
+    100% {
+        transform: scale(1.05);
+    }
+}
+
+.student-card-select.selected {
+    background: linear-gradient(135deg, #ff9900 0%, #ffb347 100%);
+    color: white;
+    border-color: #ff9900;
+    transform: scale(1.05);
+    box-shadow: 0 6px 20px rgba(255, 153, 0, 0.3);
+    animation: selectPulse 0.3s ease;
+}
+
+.student-card-select.selected .student-initials {
+    background: rgba(255, 255, 255, 0.3);
+    color: white;
+}
+
+.student-card-select input[type="checkbox"] {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.student-initials {
+    width: 36px;
+    height: 36px;
+    background: linear-gradient(135deg, #43536a 0%, #536179 100%);
+    color: white;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 14px;
+    margin-bottom: 5px;
+    transition: all 0.3s ease;
+}
+
+.student-name-short {
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.2;
+    word-break: break-word;
+}
+
+.selected-counter {
+    position: absolute;
+    top: -8px;
+    right: -8px;
+    background: #22c55e;
+    color: white;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 700;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    opacity: 0;
+    transform: scale(0);
+    transition: all 0.3s ease;
+}
+
+.student-card-select.selected .selected-counter {
+    opacity: 1;
+    transform: scale(1);
+}
+
+.selection-info {
+    text-align: center;
+    margin-top: 15px;
+    padding: 10px;
+    background: rgba(99, 102, 241, 0.1);
+    border-radius: 8px;
+    font-size: 14px;
+    color: #4f46e5;
+    font-weight: 600;
+}
+
+.selection-info.warning {
+    background: rgba(255, 153, 0, 0.1);
+    color: #ff9900;
+}
+
+.selection-info.error {
+    background: rgba(239, 68, 68, 0.1);
+    color: #ef4444;
+}
+
+/* Scrollbar styling */
+.student-selection::-webkit-scrollbar {
+    width: 8px;
+}
+
+.student-selection::-webkit-scrollbar-track {
+    background: rgba(0, 43, 69, 0.05);
+    border-radius: 4px;
+}
+
+.student-selection::-webkit-scrollbar-thumb {
+    background: rgba(0, 43, 69, 0.2);
+    border-radius: 4px;
+}
+
+.student-selection::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 43, 69, 0.3);
 }
 
 .assignment-row {
     display: grid;
-    grid-template-columns: 200px 1fr 1fr auto;
+    grid-template-columns: 1fr 150px 150px;
     gap: 15px;
     align-items: center;
-    padding: 15px;
-    background: rgba(255, 255, 255, 0.8);
-    border-radius: 10px;
-    border: 1px solid rgba(0, 43, 69, 0.1);
+    padding: 12px 0;
+    border-bottom: 1px solid rgba(0, 43, 69, 0.1);
 }
 
-.assignment-student {
+.assignment-row:last-child {
+    border-bottom: none;
+}
+
+.student-label {
     font-weight: 600;
     color: #002b45;
 }
@@ -522,26 +695,6 @@ for ($i = 0; $i < count($groups); $i++) {
     gap: 15px;
     justify-content: flex-end;
     margin-top: 25px;
-}
-
-.empty-state {
-    text-align: center;
-    padding: 60px 40px;
-    color: #666;
-    background: rgba(255, 255, 255, 0.9);
-    border-radius: 15px;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
-}
-
-.empty-state-icon {
-    font-size: 72px;
-    margin-bottom: 20px;
-    opacity: 0.5;
-}
-
-.empty-state h3 {
-    color: #002b45;
-    margin: 20px 0;
 }
 
 .flash-message {
@@ -588,11 +741,132 @@ for ($i = 0; $i < count($groups); $i++) {
     margin-top: 5px;
 }
 
+/* Print Styles */
+@media print {
+    body {
+        background: white !important;
+    }
+    
+    .groups-header {
+        background: white !important;
+        box-shadow: none !important;
+        border: 1px solid #ddd;
+        page-break-after: avoid;
+        padding: 15px !important;
+        margin-bottom: 10px !important;
+    }
+    
+    .groups-title {
+        font-size: 24px !important;
+        text-align: center;
+        width: 100%;
+    }
+    
+    .groups-actions {
+        display: none !important;
+    }
+    
+    .group-card {
+        background: white !important;
+        box-shadow: none !important;
+        border: 2px solid #333 !important;
+        page-break-inside: avoid;
+        margin-bottom: 15px;
+        padding: 15px !important;
+    }
+    
+    .group-header {
+        border-bottom: 1px solid #ccc;
+        padding-bottom: 10px;
+        margin-bottom: 10px;
+    }
+    
+    .group-info h3 {
+        font-size: 18px !important;
+        margin-bottom: 5px !important;
+    }
+    
+    .group-meta {
+        font-size: 11px !important;
+        line-height: 1.4 !important;
+    }
+    
+    .group-actions {
+        display: none !important;
+    }
+    
+    .students-list {
+        gap: 5px !important;
+    }
+    
+    .student-item {
+        padding: 8px 12px !important;
+        border: 1px solid #ddd !important;
+        background: #f9f9f9 !important;
+    }
+    
+    .student-item.completed {
+        background: #e8f5e9 !important;
+        border-color: #4caf50 !important;
+    }
+    
+    .student-subject {
+        border: 1px solid #666 !important;
+        color: #000 !important;
+        background: #e0e0e0 !important;
+        text-shadow: none !important;
+        padding: 2px 6px !important;
+        font-size: 10px !important;
+    }
+    
+    .completion-badge {
+        font-size: 14px;
+    }
+    
+    .student-name {
+        font-size: 13px !important;
+    }
+    
+    .student-examiner {
+        font-size: 11px !important;
+    }
+    
+    .btn, .modal, .flash-message, .empty-state button {
+        display: none !important;
+    }
+    
+    /* Zusammenfassung am Ende */
+    @page {
+        margin: 1.5cm;
+    }
+    
+    .groups-container::after {
+        content: "Druckdatum: " attr(data-print-date);
+        display: block;
+        text-align: right;
+        font-size: 10px;
+        color: #666;
+        margin-top: 20px;
+        padding-top: 10px;
+        border-top: 1px solid #ccc;
+    }
+}
+
 @media (max-width: 768px) {
     .groups-header {
         flex-direction: column;
         gap: 15px;
         text-align: center;
+    }
+
+    .groups-actions {
+        flex-direction: column;
+        width: 100%;
+    }
+
+    .btn {
+        width: 100%;
+        justify-content: center;
     }
 
     .assignment-row {
@@ -609,6 +883,26 @@ for ($i = 0; $i < count($groups); $i++) {
         padding: 20px;
         margin: 20px;
     }
+    
+    .students-grid {
+        grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+        gap: 8px;
+    }
+    
+    .student-card-select {
+        min-height: 70px;
+        padding: 10px;
+    }
+    
+    .student-initials {
+        width: 32px;
+        height: 32px;
+        font-size: 12px;
+    }
+    
+    .student-name-short {
+        font-size: 12px;
+    }
 }
 </style>
 
@@ -624,23 +918,28 @@ for ($i = 0; $i < count($groups); $i++) {
 <div class="groups-header">
     <div class="groups-title">
         <span>👥 Gruppen erstellen</span>
-        <?php if ($can_create_groups): ?>
-            <span class="permission-badge">✓ Berechtigung erteilt</span>
-        <?php endif; ?>
     </div>
     
-    <?php if ($can_create_groups): ?>
-        <button class="btn btn-primary" onclick="openCreateModal()">
-            ➕ Neue Gruppe erstellen
-        </button>
-    <?php else: ?>
-        <button class="btn btn-primary" disabled title="Sie haben keine Berechtigung, Gruppen zu erstellen">
-            🔒 Neue Gruppe erstellen
-        </button>
-    <?php endif; ?>
+    <div class="groups-actions">
+        <?php if ($can_create_groups): ?>
+            <button class="btn btn-primary" onclick="openCreateModal()">
+                ➕ Neue Gruppe erstellen
+            </button>
+        <?php else: ?>
+            <button class="btn btn-primary" disabled title="Sie haben keine Berechtigung, Gruppen zu erstellen">
+                🔒 Neue Gruppe erstellen
+            </button>
+        <?php endif; ?>
+        
+        <?php if (!empty($groups)): ?>
+            <button class="btn btn-print" onclick="printGroups()">
+                🖨️ Drucken
+            </button>
+        <?php endif; ?>
+    </div>
 </div>
 
-<div class="groups-container">
+<div class="groups-container" data-print-date="<?= date('d.m.Y H:i') ?>">
     <?php if (empty($groups)): ?>
         <div class="empty-state">
             <div class="empty-state-icon">👥</div>
@@ -670,7 +969,7 @@ for ($i = 0; $i < count($groups); $i++) {
                             Erstellt von: <?= htmlspecialchars($group['creator_name']) ?><br>
                             Erstellt am: <?= date('d.m.Y H:i', strtotime($group['created_at'])) ?><br>
                             Schüler: <?= $group['student_count'] ?>/4 | 
-                            Geprüft: <?= $group['examined_count'] ?>/<?= $group['student_count'] ?>
+                            Vollständig bewertet: <?= $group['examined_count'] ?>/<?= $group['student_count'] ?>
                         </div>
                     </div>
                     
@@ -693,12 +992,12 @@ for ($i = 0; $i < count($groups); $i++) {
 
                 <div class="students-list">
                     <?php foreach ($group['students'] as $student): ?>
-                        <div class="student-item <?= $student['is_examined'] ? 'examined' : 'not-examined' ?>">
+                        <div class="student-item <?= $student['is_complete'] ? 'completed' : 'not-completed' ?>">
                             <div class="student-info">
-                                <?php if ($student['is_examined']): ?>
-                                    <span class="examined-badge">✓</span>
+                                <?php if ($student['is_complete']): ?>
+                                    <span class="completion-badge completed">✅</span>
                                 <?php else: ?>
-                                    <span class="examined-badge" style="color: #dc2626;">✗</span>
+                                    <span class="completion-badge not-completed">❌</span>
                                 <?php endif; ?>
                                 <span class="student-name">
                                     <?= htmlspecialchars($student['first_name'] . ' ' . $student['last_name']) ?>
@@ -709,7 +1008,7 @@ for ($i = 0; $i < count($groups); $i++) {
                                     </span>
                                 <?php endif; ?>
                                 <?php if ($student['subject_short']): ?>
-                                    <span class="student-subject">
+                                    <span class="student-subject" style="background-color: <?= htmlspecialchars($student['subject_color'] ?: '#6366f1') ?>;">
                                         <?= htmlspecialchars($student['subject_short']) ?>
                                     </span>
                                 <?php endif; ?>
@@ -737,113 +1036,159 @@ for ($i = 0; $i < count($groups); $i++) {
             <?php endif; ?>
             <input type="hidden" name="csrf_token" value="<?= $_SESSION['csrf_token'] ?>">
 
+            <div class="form-group">
+                <label class="form-label" for="topicSelect">Thema auswählen *</label>
+                <select class="form-control" id="topicSelect" onchange="updateTopicField()" <?= $edit_group ? '' : 'required' ?>>
+                    <option value="">-- Thema wählen --</option>
+                    <?php foreach ($topics as $topic): ?>
+                        <option value="<?= htmlspecialchars($topic['title']) ?>" 
+                                <?= ($edit_group && $edit_group['name'] == $topic['title']) ? 'selected' : '' ?>>
+                            <?= htmlspecialchars($topic['title']) ?>
+                            <?php if ($topic['teacher_id'] != $teacher_id): ?>
+                                (<?= htmlspecialchars($topic['teacher_name']) ?>)
+                            <?php endif; ?>
+                        </option>
+                    <?php endforeach; ?>
+                    <option value="custom">➕ Eigenes Thema eingeben</option>
+                </select>
+            </div>
+
+            <div class="form-group" id="customTopicGroup" style="display: none;">
+                <label class="form-label" for="customTopic">Eigenes Thema *</label>
+                <input type="text" class="form-control" id="customTopic" placeholder="Thema eingeben...">
+                <div class="form-hint">Geben Sie ein eigenes Thema ein, wenn kein passendes vorhanden ist.</div>
+            </div>
+
+            <input type="hidden" name="topic" id="topicInput" value="<?= $edit_group ? htmlspecialchars($edit_group['name']) : '' ?>" required>
+
+            <div class="form-group">
+                <label class="form-label" for="classSelect">Klasse *</label>
+                <select class="form-control" id="classSelect" name="class_id" onchange="loadStudents()" required <?= $edit_group ? 'disabled' : '' ?>>
+                    <option value="">-- Klasse wählen --</option>
+                    <?php foreach ($classes as $class): ?>
+                        <option value="<?= $class['id'] ?>" 
+                                data-students="<?= $class['available_students'] ?>"
+                                <?= ($edit_group && $edit_group['class_id'] == $class['id']) || 
+                                    (!$edit_group && $last_class_id == $class['id']) ? 'selected' : '' ?>>
+                            <?= htmlspecialchars($class['name']) ?> 
+                            (<?= $class['available_students'] ?> verfügbar von <?= $class['total_students'] ?> Schülern)
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+                <?php if ($edit_group): ?>
+                    <input type="hidden" name="class_id" value="<?= $edit_group['class_id'] ?>">
+                <?php endif; ?>
+            </div>
+
             <?php if (!$edit_group): ?>
-                <!-- Nur beim Erstellen -->
-                <div class="form-group">
-                    <label class="form-label" for="groupTopic">Thema (oder aus Liste wählen)</label>
-                    <input type="text" class="form-control" id="groupTopic" name="topic" list="topics-list" required>
-                    <datalist id="topics-list">
-                        <?php foreach ($topics as $topic): ?>
-                            <option value="<?= htmlspecialchars($topic['title']) ?>">
-                        <?php endforeach; ?>
-                    </datalist>
-                </div>
-
-                <div class="form-section">
-                    <h3 class="form-section-title">1. Klasse auswählen:</h3>
-                    <select class="form-control" id="classSelect" name="class_id" required onchange="loadClassStudents(this.value)">
-                        <option value="">-- Klasse wählen --</option>
-                        <?php foreach ($classes as $class): ?>
-                            <option value="<?= $class['id'] ?>" <?= ($last_class_id && $last_class_id == $class['id']) ? 'selected' : '' ?>>
-                                <?= htmlspecialchars($class['name']) ?> (<?= $class['student_count'] ?> Schüler)
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
-                </div>
-
-                <div class="form-section">
-                    <h3 class="form-section-title">2. Schüler auswählen:</h3>
-                    <p class="info-text">Verfügbare Schüler auswählen (max. 4 pro Gruppe):</p>
-                    <div id="studentsContainer" class="students-selection">
-                        <p class="info-text" style="grid-column: 1/-1; text-align: center;">
-                            Bitte wählen Sie zuerst eine Klasse aus.
-                        </p>
+                <div class="form-group" id="studentSelectionGroup" style="display: none;">
+                    <label class="form-label">Schüler auswählen (max. 4) *</label>
+                    <div class="student-selection" id="studentList">
+                        <!-- Wird dynamisch geladen -->
                     </div>
-                    <p class="warning-text" id="studentLimitWarning" style="display: none;">
-                        Maximal 4 Schüler pro Gruppe erlaubt!
-                    </p>
-                </div>
-            <?php else: ?>
-                <!-- Beim Bearbeiten -->
-                <div class="form-group">
-                    <label class="form-label">Thema:</label>
-                    <input type="text" class="form-control" value="<?= htmlspecialchars($edit_group['name']) ?>" name="topic" required>
-                </div>
-
-                <div class="form-section">
-                    <h3 class="form-section-title">Schüler:</h3>
-                    <div class="assignment-grid">
-                        <?php foreach ($edit_group['students'] as $student): ?>
-                            <div class="assignment-row">
-                                <div class="assignment-student">
-                                    <?= htmlspecialchars($student['first_name'] . ' ' . $student['last_name']) ?>
-                                </div>
-                                <select class="form-control" name="examiner[<?= $student['student_id'] ?>]">
-                                    <option value="">-- Lehrer wählen --</option>
-                                    <?php foreach ($teachers as $teacher): ?>
-                                        <option value="<?= $teacher['id'] ?>" <?= $student['examiner_teacher_id'] == $teacher['id'] ? 'selected' : '' ?>>
-                                            <?= htmlspecialchars($teacher['name']) ?>
-                                        </option>
-                                    <?php endforeach; ?>
-                                </select>
-                                <select class="form-control" name="subject[<?= $student['student_id'] ?>]">
-                                    <option value="">-- Fach wählen --</option>
-                                    <?php foreach ($subjects as $subject): ?>
-                                        <option value="<?= $subject['id'] ?>" <?= $student['subject_id'] == $subject['id'] ? 'selected' : '' ?>>
-                                            <?= htmlspecialchars($subject['short_name'] . ' - ' . $subject['full_name']) ?>
-                                        </option>
-                                    <?php endforeach; ?>
-                                </select>
-                                <button type="button" class="btn btn-danger" onclick="removeStudent(<?= $student['student_id'] ?>)">
-                                    Entfernen
-                                </button>
-                            </div>
-                        <?php endforeach; ?>
-                    </div>
+                    <div class="form-hint">Wählen Sie 1-4 Schüler für diese Gruppe aus.</div>
                 </div>
             <?php endif; ?>
 
-            <div class="form-section" id="assignmentSection" style="<?= $edit_group ? 'display: none;' : '' ?>">
-                <h3 class="form-section-title">3. Lehrer und Fächer zuweisen:</h3>
-                <div id="assignmentsContainer" class="assignment-grid">
-                    <p class="info-text" style="text-align: center;">
-                        <?= $edit_group ? '' : 'Keine Schüler ausgewählt.' ?>
-                    </p>
+            <div class="form-group" id="assignmentGroup" style="<?= !$edit_group ? 'display: none;' : '' ?>">
+                <label class="form-label">Prüfer und Fächer zuweisen</label>
+                <div id="assignmentList">
+                    <?php if ($edit_group): ?>
+                        <?php foreach ($edit_group['students'] as $student): ?>
+                            <div class="assignment-row">
+                                <div class="student-label">
+                                    <?= htmlspecialchars($student['first_name'] . ' ' . $student['last_name']) ?>
+                                </div>
+                                <select name="examiner[<?= $student['student_id'] ?>]" class="form-control">
+                                    <option value="">-- Prüfer --</option>
+                                    <?php foreach ($teachers as $teach): ?>
+                                        <option value="<?= $teach['id'] ?>" 
+                                                <?= $student['examiner_teacher_id'] == $teach['id'] ? 'selected' : '' ?>>
+                                            <?= htmlspecialchars($teach['name']) ?>
+                                        </option>
+                                    <?php endforeach; ?>
+                                </select>
+                                <select name="subject[<?= $student['student_id'] ?>]" class="form-control">
+                                    <option value="">-- Fach --</option>
+                                    <?php foreach ($subjects as $subject): ?>
+                                        <option value="<?= $subject['id'] ?>" 
+                                                <?= $student['subject_id'] == $subject['id'] ? 'selected' : '' ?>>
+                                            <?= htmlspecialchars($subject['short_name']) ?>
+                                        </option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </div>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
                 </div>
             </div>
 
             <div class="modal-actions">
                 <button type="button" class="btn btn-secondary" onclick="closeModal()">Abbrechen</button>
-                <button type="submit" class="btn btn-primary"><?= $edit_group ? 'Speichern' : 'Gruppe erstellen' ?></button>
+                <button type="submit" class="btn btn-primary"><?= $edit_group ? 'Aktualisieren' : 'Gruppe erstellen' ?></button>
             </div>
         </form>
     </div>
 </div>
 
+<?php
+// Schülerdaten für JavaScript vorbereiten - NUR Schüler die noch in KEINER Gruppe sind!
+$students_by_class = [];
+foreach ($classes as $class) {
+    $stmt = $db->prepare("
+        SELECT s.id, s.first_name, s.last_name
+        FROM students s
+        WHERE s.class_id = ? 
+        AND s.school_id = ? 
+        AND s.is_active = 1
+        AND NOT EXISTS (
+            SELECT 1 
+            FROM group_students gs 
+            JOIN groups g ON gs.group_id = g.id 
+            WHERE gs.student_id = s.id 
+            AND g.is_active = 1
+        )
+        ORDER BY s.last_name, s.first_name
+    ");
+    $stmt->execute([$class['id'], $school_id]);
+    $students_by_class[$class['id']] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+?>
+
 <script>
+// Schülerdaten als JavaScript-Variable
+const studentsByClass = <?= json_encode($students_by_class) ?>;
 let selectedStudents = [];
-const maxStudents = 4;
+
+function printGroups() {
+    const container = document.querySelector('.groups-container');
+    if (container) {
+        container.setAttribute('data-print-date', new Date().toLocaleDateString('de-DE') + ' ' + new Date().toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'}));
+    }
+    window.print();
+}
 
 function openCreateModal() {
     document.getElementById('groupForm').reset();
     selectedStudents = [];
+    document.getElementById('studentSelectionGroup').style.display = 'none';
+    document.getElementById('assignmentGroup').style.display = 'none';
     document.getElementById('groupModal').classList.add('show');
-    updateAssignmentsDisplay();
+    
+    // Modal nach oben scrollen
+    document.getElementById('groupModal').scrollTop = 0;
+    
+    // Reset der Auswahl-Info
+    const infoDiv = document.getElementById('selectionInfo');
+    if (infoDiv) {
+        infoDiv.textContent = 'Wählen Sie 1-4 Schüler aus (0 ausgewählt)';
+        infoDiv.className = 'selection-info';
+    }
     
     // Wenn letzte Klasse vorhanden, Schüler laden
     const classSelect = document.getElementById('classSelect');
-    if (classSelect && classSelect.value) {
-        loadClassStudents(classSelect.value);
+    if (classSelect.value) {
+        loadStudents();
     }
 }
 
@@ -855,137 +1200,203 @@ function closeModal() {
     <?php endif; ?>
 }
 
-function loadClassStudents(classId) {
-    if (!classId) {
-        document.getElementById('studentsContainer').innerHTML = '<p class="info-text" style="grid-column: 1/-1; text-align: center;">Bitte wählen Sie zuerst eine Klasse aus.</p>';
-        return;
+function updateTopicField() {
+    const select = document.getElementById('topicSelect');
+    const customGroup = document.getElementById('customTopicGroup');
+    const topicInput = document.getElementById('topicInput');
+    
+    if (select.value === 'custom') {
+        customGroup.style.display = 'block';
+        document.getElementById('customTopic').required = true;
+        topicInput.value = '';
+    } else {
+        customGroup.style.display = 'none';
+        document.getElementById('customTopic').required = false;
+        topicInput.value = select.value;
     }
-
-    // AJAX-Request simulieren (in Produktion würde hier ein echter AJAX-Call stehen)
-    fetch(`get_class_students.php?class_id=${classId}`)
-        .then(response => response.json())
-        .then(data => {
-            displayStudents(data.students);
-        })
-        .catch(() => {
-            // Fallback für Demo
-            displayStudents([]);
-        });
 }
 
-function displayStudents(students) {
-    const container = document.getElementById('studentsContainer');
-    
-    if (students.length === 0) {
-        // Demo-Daten für Entwicklung
-        <?php if (isset($classes[0])): ?>
-            // Lade Schüler der ausgewählten Klasse
-            const classId = document.getElementById('classSelect').value;
-            if (classId) {
-                fetch(`dashboard.php?page=gruppen&action=get_students&class_id=${classId}`)
-                    .then(response => response.text())
-                    .then(html => {
-                        container.innerHTML = html;
-                    });
-            }
-        <?php endif; ?>
+document.getElementById('customTopic')?.addEventListener('input', function() {
+    document.getElementById('topicInput').value = this.value;
+});
+
+function loadStudents() {
+    const classId = document.getElementById('classSelect').value;
+    if (!classId) {
+        document.getElementById('studentSelectionGroup').style.display = 'none';
         return;
     }
     
-    let html = '';
-    students.forEach(student => {
-        const isDisabled = student.has_group ? 'disabled' : '';
-        html += `
-            <label class="student-checkbox ${isDisabled}">
-                <input type="checkbox" name="students[]" value="${student.id}" 
-                    onchange="toggleStudent(${student.id}, '${student.name}')" 
-                    ${isDisabled}>
-                <span>${student.name}</span>
-                ${student.has_group ? '<small style="color: #999;"> (bereits in Gruppe)</small>' : ''}
-            </label>
-        `;
-    });
+    const studentList = document.getElementById('studentList');
+    studentList.innerHTML = '';
     
-    container.innerHTML = html;
+    // Verwende die vorgeladenen Schülerdaten
+    const students = studentsByClass[classId] || [];
+    
+    if (students.length === 0) {
+        studentList.innerHTML = '<p style="text-align: center; color: #666; padding: 30px;">Keine freien Schüler in dieser Klasse. Alle Schüler sind bereits einer Gruppe zugeordnet.</p>';
+    } else {
+        // Grid-Container erstellen
+        const gridContainer = document.createElement('div');
+        gridContainer.className = 'students-grid';
+        
+        students.forEach((student, index) => {
+            // Initialen generieren
+            const initials = (student.first_name.charAt(0) + student.last_name.charAt(0)).toUpperCase();
+            
+            const card = document.createElement('div');
+            card.className = 'student-card-select';
+            card.id = `card_${student.id}`;
+            card.innerHTML = `
+                <input type="checkbox" 
+                       id="student_${student.id}" 
+                       name="students[]" 
+                       value="${student.id}">
+                <div class="selected-counter">${index + 1}</div>
+                <div class="student-initials">${initials}</div>
+                <div class="student-name-short">
+                    ${student.first_name}<br>${student.last_name}
+                </div>
+            `;
+            
+            // Click-Handler für die gesamte Karte
+            card.addEventListener('click', function() {
+                const checkbox = this.querySelector('input[type="checkbox"]');
+                const isCurrentlyChecked = checkbox.checked;
+                
+                if (!isCurrentlyChecked && selectedStudents.length >= 4) {
+                    updateSelectionInfo('error', 'Maximal 4 Schüler pro Gruppe erlaubt!');
+                    // Kurz rot aufblinken lassen
+                    this.style.borderColor = '#ef4444';
+                    setTimeout(() => {
+                        this.style.borderColor = '';
+                    }, 300);
+                    return;
+                }
+                
+                checkbox.checked = !isCurrentlyChecked;
+                toggleStudent(student.id, `${student.first_name} ${student.last_name}`);
+                
+                // Karte visuell aktualisieren
+                if (checkbox.checked) {
+                    this.classList.add('selected');
+                } else {
+                    this.classList.remove('selected');
+                }
+                
+                // Nummerierung aktualisieren
+                updateSelectionNumbers();
+            });
+            
+            gridContainer.appendChild(card);
+        });
+        
+        studentList.appendChild(gridContainer);
+        
+        // Info-Bereich hinzufügen
+        const infoDiv = document.createElement('div');
+        infoDiv.className = 'selection-info';
+        infoDiv.id = 'selectionInfo';
+        infoDiv.innerHTML = `Wählen Sie 1-4 Schüler aus (0 ausgewählt)`;
+        studentList.appendChild(infoDiv);
+    }
+    
+    document.getElementById('studentSelectionGroup').style.display = 'block';
 }
 
 function toggleStudent(studentId, studentName) {
-    const checkbox = document.querySelector(`input[value="${studentId}"]`);
+    const checkbox = document.getElementById(`student_${studentId}`);
+    const card = document.getElementById(`card_${studentId}`);
     
     if (checkbox.checked) {
-        if (selectedStudents.length >= maxStudents) {
-            checkbox.checked = false;
-            document.getElementById('studentLimitWarning').style.display = 'block';
-            setTimeout(() => {
-                document.getElementById('studentLimitWarning').style.display = 'none';
-            }, 3000);
-            return;
-        }
-        selectedStudents.push({ id: studentId, name: studentName });
+        selectedStudents.push({id: studentId, name: studentName});
+        card.classList.add('selected');
     } else {
         selectedStudents = selectedStudents.filter(s => s.id !== studentId);
+        card.classList.remove('selected');
     }
     
-    updateAssignmentsDisplay();
+    updateAssignmentList();
+    updateSelectionInfo();
+    updateSelectionNumbers();
 }
 
-function updateAssignmentsDisplay() {
-    const container = document.getElementById('assignmentsContainer');
-    const section = document.getElementById('assignmentSection');
+function updateSelectionNumbers() {
+    // Alle ausgewählten Karten finden und neu nummerieren
+    const selectedCards = document.querySelectorAll('.student-card-select.selected');
+    selectedCards.forEach((card, index) => {
+        const counter = card.querySelector('.selected-counter');
+        if (counter) {
+            counter.textContent = index + 1;
+        }
+    });
+}
+
+function updateSelectionInfo(type = 'normal', customMessage = null) {
+    const infoDiv = document.getElementById('selectionInfo');
+    if (!infoDiv) return;
     
-    if (selectedStudents.length === 0) {
-        container.innerHTML = '<p class="info-text" style="text-align: center;">Keine Schüler ausgewählt.</p>';
-        section.style.display = 'none';
+    if (customMessage) {
+        infoDiv.textContent = customMessage;
+        infoDiv.className = `selection-info ${type}`;
+        setTimeout(() => {
+            updateSelectionInfo();
+        }, 3000);
         return;
     }
     
-    section.style.display = 'block';
-    let html = '<p class="info-text">Ausgewählte Schüler - Lehrer und Fach zuweisen:</p>';
+    const count = selectedStudents.length;
+    let message = `Wählen Sie 1-4 Schüler aus (${count} ausgewählt)`;
+    let className = 'selection-info';
     
-    selectedStudents.forEach(student => {
-        html += `
-            <div class="assignment-row">
-                <div class="assignment-student">${student.name}</div>
-                <select class="form-control" name="examiner[${student.id}]" required>
-                    <option value="">-- Lehrer wählen --</option>
+    if (count === 0) {
+        className = 'selection-info';
+    } else if (count === 4) {
+        message = `Maximum erreicht! (${count} von 4 ausgewählt)`;
+        className = 'selection-info warning';
+    } else if (count >= 1 && count < 4) {
+        message = `${count} von 4 Schülern ausgewählt`;
+        className = 'selection-info';
+    }
+    
+    infoDiv.textContent = message;
+    infoDiv.className = className;
+}
+
+function updateAssignmentList() {
+    const assignmentList = document.getElementById('assignmentList');
+    assignmentList.innerHTML = '';
+    
+    if (selectedStudents.length > 0) {
+        selectedStudents.forEach(student => {
+            const row = document.createElement('div');
+            row.className = 'assignment-row';
+            row.innerHTML = `
+                <div class="student-label">${student.name}</div>
+                <select name="examiner[${student.id}]" class="form-control">
+                    <option value="">-- Prüfer --</option>
                     <?php foreach ($teachers as $teacher): ?>
                         <option value="<?= $teacher['id'] ?>"><?= htmlspecialchars($teacher['name']) ?></option>
                     <?php endforeach; ?>
                 </select>
-                <select class="form-control" name="subject[${student.id}]" required>
-                    <option value="">-- Fach wählen --</option>
+                <select name="subject[${student.id}]" class="form-control">
+                    <option value="">-- Fach --</option>
                     <?php foreach ($subjects as $subject): ?>
-                        <option value="<?= $subject['id'] ?>"><?= htmlspecialchars($subject['short_name'] . ' - ' . $subject['full_name']) ?></option>
+                        <option value="<?= $subject['id'] ?>"><?= htmlspecialchars($subject['short_name']) ?></option>
                     <?php endforeach; ?>
                 </select>
-            </div>
-        `;
-    });
-    
-    container.innerHTML = html;
-}
-
-function removeStudent(studentId) {
-    if (!confirm('Möchten Sie diesen Schüler wirklich aus der Gruppe entfernen?')) {
-        return;
+            `;
+            assignmentList.appendChild(row);
+        });
+        
+        document.getElementById('assignmentGroup').style.display = 'block';
+    } else {
+        document.getElementById('assignmentGroup').style.display = 'none';
     }
-    
-    // In Produktion würde hier ein AJAX-Call zum Entfernen erfolgen
-    const form = document.createElement('form');
-    form.method = 'POST';
-    form.innerHTML = `
-        <input type="hidden" name="form_action" value="remove_student">
-        <input type="hidden" name="group_id" value="<?= $edit_group ? $edit_group['id'] : '' ?>">
-        <input type="hidden" name="student_id" value="${studentId}">
-        <input type="hidden" name="csrf_token" value="<?= $_SESSION['csrf_token'] ?>">
-    `;
-    document.body.appendChild(form);
-    form.submit();
 }
 
-// Event Listeners
+// Flash Messages automatisch ausblenden
 document.addEventListener('DOMContentLoaded', function() {
-    // Flash Messages automatisch ausblenden
     setTimeout(() => {
         document.querySelectorAll('.flash-message').forEach(msg => {
             msg.style.transition = 'opacity 0.3s';
@@ -993,13 +1404,6 @@ document.addEventListener('DOMContentLoaded', function() {
             setTimeout(() => msg.remove(), 300);
         });
     }, 5000);
-    
-    // Modal Click-Outside Handler
-    document.getElementById('groupModal').addEventListener('click', function(e) {
-        if (e.target === this) {
-            closeModal();
-        }
-    });
     
     // ESC Key Handler
     document.addEventListener('keydown', function(e) {
@@ -1010,41 +1414,40 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         }
     });
-});
-
-// Demo-Funktion für AJAX-Fallback (in Produktion durch echte API ersetzen)
-<?php if (!$edit_group && isset($_GET['action']) && $_GET['action'] === 'get_students'): ?>
-    <?php
-    $class_id = (int)($_GET['class_id'] ?? 0);
-    if ($class_id > 0) {
-        $stmt = $db->prepare("
-            SELECT s.*, 
-                   CASE WHEN gs.id IS NOT NULL THEN 1 ELSE 0 END as has_group
-            FROM students s
-            LEFT JOIN group_students gs ON s.id = gs.student_id
-            WHERE s.class_id = ? AND s.is_active = 1
-            ORDER BY s.last_name, s.first_name
-        ");
-        $stmt->execute([$class_id]);
-        $students = $stmt->fetchAll();
-        
-        foreach ($students as $student) {
-            $isDisabled = $student['has_group'] ? 'disabled' : '';
-            $name = htmlspecialchars($student['first_name'] . ' ' . $student['last_name']);
-            echo <<<HTML
-                <label class="student-checkbox {$isDisabled}">
-                    <input type="checkbox" name="students[]" value="{$student['id']}" 
-                        onchange="toggleStudent({$student['id']}, '{$name}')" 
-                        {$isDisabled}>
-                    <span>{$name}</span>
-HTML;
-            if ($student['has_group']) {
-                echo '<small style="color: #999;"> (bereits in Gruppe)</small>';
-            }
-            echo '</label>';
+    
+    // Click outside modal handler
+    document.getElementById('groupModal').addEventListener('click', function(e) {
+        if (e.target === this) {
+            closeModal();
         }
+    });
+    
+    // Wenn Klasse vorausgewählt ist, Schüler laden
+    <?php if (!$edit_group && $last_class_id): ?>
+        setTimeout(() => {
+            const classSelect = document.getElementById('classSelect');
+            if (classSelect && classSelect.value) {
+                loadStudents();
+            }
+        }, 100);
+    <?php endif; ?>
+    
+    // Modal beim Bearbeiten nach oben scrollen
+    <?php if ($edit_group): ?>
+        document.getElementById('groupModal').scrollTop = 0;
+    <?php endif; ?>
+    
+    // Druckfunktion mit aktuellem Datum
+    const printButton = document.querySelector('.btn-print');
+    if (printButton) {
+        printButton.addEventListener('click', function(e) {
+            e.preventDefault();
+            const container = document.querySelector('.groups-container');
+            if (container) {
+                container.setAttribute('data-print-date', new Date().toLocaleDateString('de-DE') + ' ' + new Date().toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'}));
+            }
+            window.print();
+        });
     }
-    exit();
-    ?>
-<?php endif; ?>
+});
 </script>

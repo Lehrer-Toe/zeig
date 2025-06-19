@@ -223,6 +223,17 @@ if (!$last_template_id) {
     border-color: #ff9900;
 }
 
+/* Grüne Markierung für komplett bewertete Schüler */
+.student-card.completed {
+    border-color: #22c55e;
+    background: rgba(34, 197, 94, 0.05);
+}
+
+.student-card.completed:hover {
+    border-color: #16a34a;
+    box-shadow: 0 8px 32px rgba(34, 197, 94, 0.2);
+}
+
 .student-row {
     display: flex;
     align-items: center;
@@ -262,6 +273,9 @@ if (!$last_template_id) {
     border-radius: 20px;
     font-size: 13px;
     font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
 }
 
 .status-badge.rated {
@@ -272,6 +286,17 @@ if (!$last_template_id) {
 .status-badge.unrated {
     background: rgba(239, 68, 68, 0.1);
     color: #dc2626;
+}
+
+.status-badge.completed {
+    background: rgba(34, 197, 94, 0.2);
+    color: #15803d;
+    border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.completion-check {
+    font-size: 16px;
+    color: #22c55e;
 }
 
 .grade-display {
@@ -354,14 +379,14 @@ if (!$last_template_id) {
 
 /* Rating Modal Styles */
 .rating-modal {
-    position: fixed;
+    /* WICHTIG: position absolute statt fixed, damit der Header beim Scrollen verschwindet */
+    position: absolute;
     top: 0;
     left: 0;
     width: 100%;
-    height: 100%;
+    min-height: 100vh;
     background: linear-gradient(to bottom, #999999 0%, #ff9900 100%);
     z-index: 1000;
-    overflow-y: auto;
 }
 
 .rating-modal-content {
@@ -943,7 +968,7 @@ if (!$last_template_id) {
             </div>
         <?php else: ?>
             <?php foreach ($students as $student): ?>
-                <div class="student-card">
+                <div class="student-card <?= $student['is_complete'] ? 'completed' : '' ?>">
                     <div class="student-row">
                         <div class="student-info">
                             <div class="student-name">
@@ -960,9 +985,15 @@ if (!$last_template_id) {
                         </div>
                         
                         <div class="student-status">
-                            <span class="status-badge <?= $student['rating_id'] ? 'rated' : 'unrated' ?>">
-                                <?= $student['rating_id'] ? 'Bewertet' : 'Noch nicht bewertet' ?>
-                            </span>
+                            <?php if ($student['is_complete']): ?>
+                                <span class="status-badge completed">
+                                    <span class="completion-check">✅</span> Vollständig bewertet
+                                </span>
+                            <?php else: ?>
+                                <span class="status-badge <?= $student['rating_id'] ? 'rated' : 'unrated' ?>">
+                                    <?= $student['rating_id'] ? 'Bewertet' : 'Noch nicht bewertet' ?>
+                                </span>
+                            <?php endif; ?>
                             
                             <?php if ($student['rating_id'] && $student['final_grade']): ?>
                                 <div style="text-align: center;">

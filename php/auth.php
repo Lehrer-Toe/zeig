@@ -36,6 +36,23 @@ function loginUser($user) {
     $_SESSION['first_login'] = $user['first_login'];
     $_SESSION['login_time'] = time();
     
+    // WICHTIG: can_create_groups für Lehrer setzen
+    if ($user['user_type'] === 'lehrer') {
+        // Prüfen ob die Spalte existiert und den Wert laden
+        $db = getDB();
+        try {
+            $stmt = $db->prepare("SELECT can_create_groups FROM users WHERE id = ?");
+            $stmt->execute([$user['id']]);
+            $result = $stmt->fetch();
+            $_SESSION['can_create_groups'] = isset($result['can_create_groups']) ? (int)$result['can_create_groups'] : 0;
+        } catch (Exception $e) {
+            // Falls Spalte nicht existiert, default auf 0
+            $_SESSION['can_create_groups'] = 0;
+        }
+    } else {
+        $_SESSION['can_create_groups'] = 0;
+    }
+    
     // Session in Datenbank speichern
     $db = getDB();
     $sessionId = session_id();
@@ -110,190 +127,78 @@ function isLoggedIn() {
         return false;
     }
     
+    // Login-Zeit aktualisieren
+    $_SESSION['login_time'] = time();
+    
     return true;
 }
 
 /**
- * Aktuellen User aus Session holen
+ * Passwort ändern
  */
-function getCurrentUser() {
-    if (!isLoggedIn()) {
-        return null;
-    }
+function changePassword($userId, $newPassword) {
+    $passwordHash = password_hash($newPassword, PASSWORD_DEFAULT);
     
-    return [
-        'id' => $_SESSION['user_id'],
-        'email' => $_SESSION['email'],
-        'user_type' => $_SESSION['user_type'],
-        'name' => $_SESSION['name'],
-        'school_id' => $_SESSION['school_id'],
-        'first_login' => $_SESSION['first_login']
-    ];
+    $db = getDB();
+    $stmt = $db->prepare("
+        UPDATE users 
+        SET password_hash = ?, first_login = 0, updated_at = CURRENT_TIMESTAMP 
+        WHERE id = ?
+    ");
+    
+    return $stmt->execute([$passwordHash, $userId]);
 }
 
 /**
- * Weiterleitung basierend auf User-Typ
+ * Admin-Zugriff prüfen
  */
-function redirectByUserType($userType) {
-    switch ($userType) {
-        case 'superadmin':
-            header('Location: ' . BASE_URL . '/superadmin/dashboard.php');
-            break;
-        case 'schuladmin':
-            header('Location: ' . BASE_URL . '/admin/dashboard.php');
-            break;
-        case 'lehrer':
-            header('Location: ' . BASE_URL . '/lehrer/dashboard.php');
-            break;
-        default:
-            header('Location: ' . BASE_URL . '/index.php');
-    }
-    exit;
-}
-
-/**
- * Zugriff prüfen - nur für bestimmte User-Typen
- */
-function requireUserType($allowedTypes) {
-    if (!isLoggedIn()) {
-        header('Location: ' . BASE_URL . '/index.php');
-        exit;
+function requireAdmin() {
+    if (!isLoggedIn() || $_SESSION['user_type'] !== 'superadmin') {
+        header('Location: /index.php');
+        exit();
     }
     
-    $user = getCurrentUser();
-    
-    if (!in_array($user['user_type'], (array)$allowedTypes)) {
-        http_response_code(403);
-        die('Zugriff verweigert. Sie haben keine Berechtigung für diese Seite.');
-    }
-    
-    return $user;
-}
-
-/**
- * Superadmin-Zugriff prüfen
- */
-function requireSuperadmin() {
-    return requireUserType('superadmin');
+    return getUserById($_SESSION['user_id']);
 }
 
 /**
  * Schuladmin-Zugriff prüfen
  */
 function requireSchuladmin() {
-    return requireUserType(['superadmin', 'schuladmin']);
+    if (!isLoggedIn() || $_SESSION['user_type'] !== 'schuladmin') {
+        header('Location: /index.php');
+        exit();
+    }
+    
+    return getUserById($_SESSION['user_id']);
 }
 
 /**
  * Lehrer-Zugriff prüfen
  */
 function requireLehrer() {
-    return requireUserType(['superadmin', 'schuladmin', 'lehrer']);
+    if (!isLoggedIn() || $_SESSION['user_type'] !== 'lehrer') {
+        header('Location: /index.php');
+        exit();
+    }
+    
+    return getUserById($_SESSION['user_id']);
 }
 
 /**
- * Schul-Lizenz prüfen
+ * Schullizenz prüfen
  */
-function requireValidSchoolLicense($schoolId = null) {
-    $user = getCurrentUser();
+function requireValidSchoolLicense($schoolId) {
+    $school = getSchoolById($schoolId);
     
-    if ($user['user_type'] === 'superadmin') {
-        return true; // Superadmin hat immer Zugriff
+    if (!$school || !$school['is_active']) {
+        die('Schule nicht aktiv oder Lizenz abgelaufen.');
     }
     
-    $schoolId = $schoolId ?? $user['school_id'];
-    
-    if (!$schoolId) {
-        die('Keine Schule zugeordnet.');
-    }
-    
-    if (!checkSchoolLicense($schoolId)) {
-        die('Der Zugang zu dieser Schule ist deaktiviert oder die Lizenz ist abgelaufen.');
+    if ($school['license_valid_until'] && strtotime($school['license_valid_until']) < time()) {
+        die('Schullizenz abgelaufen. Bitte kontaktieren Sie den Administrator.');
     }
     
     return true;
-}
-
-/**
- * CSRF Token prüfen
- */
-function validateCSRFToken($token) {
-    return isset($_SESSION['csrf_token']) && hash_equals($_SESSION['csrf_token'], $token);
-}
-
-/**
- * Neue CSRF Token generieren
- */
-function generateCSRFToken() {
-    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
-    return $_SESSION['csrf_token'];
-}
-
-/**
- * Session-Cleanup (sollte per Cronjob regelmäßig ausgeführt werden)
- */
-function cleanupExpiredSessions() {
-    $db = getDB();
-    $stmt = $db->prepare("DELETE FROM user_sessions WHERE expires_at < NOW()");
-    return $stmt->execute();
-}
-
-/**
- * Passwort-Stärke prüfen
- */
-function validatePasswordStrength($password) {
-    $errors = [];
-    
-    if (strlen($password) < PASSWORD_MIN_LENGTH) {
-        $errors[] = "Passwort muss mindestens " . PASSWORD_MIN_LENGTH . " Zeichen lang sein.";
-    }
-    
-    if (!preg_match('/[a-z]/', $password)) {
-        $errors[] = "Passwort muss mindestens einen Kleinbuchstaben enthalten.";
-    }
-    
-    if (!preg_match('/[A-Z]/', $password)) {
-        $errors[] = "Passwort muss mindestens einen Großbuchstaben enthalten.";
-    }
-    
-    if (!preg_match('/[0-9]/', $password)) {
-        $errors[] = "Passwort muss mindestens eine Zahl enthalten.";
-    }
-    
-    return $errors;
-}
-
-/**
- * Login-Versuche limitieren (einfache Implementierung)
- */
-function checkLoginAttempts($email) {
-    if (!isset($_SESSION['login_attempts'])) {
-        $_SESSION['login_attempts'] = [];
-    }
-    
-    $attempts = $_SESSION['login_attempts'][$email] ?? ['count' => 0, 'last_attempt' => 0];
-    
-    // Reset nach 15 Minuten
-    if (time() - $attempts['last_attempt'] > 900) {
-        $_SESSION['login_attempts'][$email] = ['count' => 0, 'last_attempt' => time()];
-        return true;
-    }
-    
-    return $attempts['count'] < 5;
-}
-
-function recordLoginAttempt($email, $success = false) {
-    if (!isset($_SESSION['login_attempts'])) {
-        $_SESSION['login_attempts'] = [];
-    }
-    
-    if ($success) {
-        unset($_SESSION['login_attempts'][$email]);
-    } else {
-        $attempts = $_SESSION['login_attempts'][$email] ?? ['count' => 0, 'last_attempt' => time()];
-        $attempts['count']++;
-        $attempts['last_attempt'] = time();
-        $_SESSION['login_attempts'][$email] = $attempts;
-    }
 }
 ?>
