@@ -84,8 +84,7 @@ $stmt = $db->prepare("
            COUNT(DISTINCT CASE 
                WHEN NOT EXISTS (
                    SELECT 1 FROM group_students gs 
-                   JOIN groups g ON gs.group_id = g.id 
-                   WHERE gs.student_id = s.id AND g.is_active = 1
+                   WHERE gs.student_id = s.id
                ) THEN s.id 
            END) as available_students,
            COUNT(s.id) as total_students
@@ -1144,14 +1143,41 @@ foreach ($classes as $class) {
         AND NOT EXISTS (
             SELECT 1 
             FROM group_students gs 
-            JOIN groups g ON gs.group_id = g.id 
-            WHERE gs.student_id = s.id 
-            AND g.is_active = 1
+            WHERE gs.student_id = s.id
         )
         ORDER BY s.last_name, s.first_name
     ");
     $stmt->execute([$class['id'], $school_id]);
     $students_by_class[$class['id']] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+// Debug: Überprüfung der geladenen Schüler (kann nach Verifikation entfernt werden)
+if (isset($_GET['debug']) && $_GET['debug'] === '1') {
+    echo '<pre style="background: #f0f0f0; padding: 10px; margin: 20px; border: 1px solid #ccc;">';
+    echo "=== DEBUG: Verfügbare Schüler pro Klasse ===\n\n";
+    foreach ($students_by_class as $class_id => $students) {
+        $class_name = '';
+        foreach ($classes as $c) {
+            if ($c['id'] == $class_id) {
+                $class_name = $c['name'];
+                break;
+            }
+        }
+        echo "Klasse $class_name (ID: $class_id): " . count($students) . " verfügbare Schüler\n";
+        foreach ($students as $s) {
+            // Prüfen ob dieser Schüler wirklich in keiner Gruppe ist
+            $check = $db->prepare("SELECT g.id, g.name FROM group_students gs JOIN groups g ON gs.group_id = g.id WHERE gs.student_id = ?");
+            $check->execute([$s['id']]);
+            $inGroup = $check->fetch();
+            if ($inGroup) {
+                echo "  ⚠️ FEHLER: {$s['first_name']} {$s['last_name']} (ID: {$s['id']}) ist bereits in Gruppe '{$inGroup['name']}' (ID: {$inGroup['id']})\n";
+            } else {
+                echo "  ✓ {$s['first_name']} {$s['last_name']} (ID: {$s['id']})\n";
+            }
+        }
+        echo "\n";
+    }
+    echo '</pre>';
 }
 ?>
 

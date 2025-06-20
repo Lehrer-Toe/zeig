@@ -1,14 +1,85 @@
 <?php
+session_start();
+
+// Angepasste Pfade für deine Struktur
 require_once '../config.php';
 
-// Schuladmin-Zugriff prüfen
-$user = requireSchuladmin();
-requireValidSchoolLicense($user['school_id']);
+// Überprüfe Admin-Rechte
+if (!isset($_SESSION['user_id']) || $_SESSION['user_type'] !== 'schuladmin') {
+    header('Location: ../index.php');
+    exit();
+}
 
-// Schuldaten laden
-$school = getSchoolById($user['school_id']);
-if (!$school) {
-    die('Schule nicht gefunden.');
+// Datenbankverbindung holen
+$pdo = getDB();
+$admin_id = $_SESSION['user_id'];
+$school_id = $_SESSION['school_id'];
+$message = '';
+$error = '';
+
+// Nachricht erstellen
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_news'])) {
+    $title = trim($_POST['title']);
+    $content = trim($_POST['content']);
+    $is_important = isset($_POST['is_important']) ? 1 : 0;
+    $expires_at = !empty($_POST['expires_at']) ? $_POST['expires_at'] : null;
+    
+    if (!empty($title) && !empty($content)) {
+        try {
+            $stmt = $pdo->prepare("
+                INSERT INTO admin_news (title, content, created_by, expires_at, is_important)
+                VALUES (?, ?, ?, ?, ?)
+            ");
+            $stmt->execute([$title, $content, $admin_id, $expires_at, $is_important]);
+            $message = "Nachricht erfolgreich erstellt!";
+        } catch (PDOException $e) {
+            $error = "Fehler beim Erstellen der Nachricht: " . $e->getMessage();
+        }
+    } else {
+        $error = "Bitte füllen Sie alle Pflichtfelder aus.";
+    }
+}
+
+// Nachricht löschen
+if (isset($_POST['delete_news']) && isset($_POST['news_id'])) {
+    try {
+        $stmt = $pdo->prepare("DELETE FROM admin_news WHERE id = ?");
+        $stmt->execute([$_POST['news_id']]);
+        $message = "Nachricht erfolgreich gelöscht!";
+    } catch (PDOException $e) {
+        $error = "Fehler beim Löschen der Nachricht: " . $e->getMessage();
+    }
+}
+
+// Alle Nachrichten abrufen (nur für diese Schule)
+try {
+    $stmt = $pdo->prepare("
+        SELECT n.*, 
+               COUNT(DISTINCT r.teacher_id) as read_count,
+               (SELECT COUNT(DISTINCT id) FROM users WHERE user_type = 'lehrer' AND school_id = ?) as total_teachers
+        FROM admin_news n
+        LEFT JOIN news_read_status r ON n.id = r.news_id
+        LEFT JOIN users u ON n.created_by = u.id
+        WHERE u.school_id = ?
+        AND (n.expires_at IS NULL OR n.expires_at >= CURDATE())
+        GROUP BY n.id
+        ORDER BY n.created_at DESC
+    ");
+    $stmt->execute([$school_id, $school_id]);
+    $news_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    $error = "Fehler beim Abrufen der Nachrichten: " . $e->getMessage();
+    $news_list = [];
+}
+
+// Flash-Messages verarbeiten
+if (isset($_SESSION['flash_message'])) {
+    $message = $_SESSION['flash_message'];
+    unset($_SESSION['flash_message']);
+}
+if (isset($_SESSION['flash_error'])) {
+    $error = $_SESSION['flash_error'];
+    unset($_SESSION['flash_error']);
 }
 ?>
 <!DOCTYPE html>
@@ -16,271 +87,336 @@ if (!$school) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mitteilungen - <?php echo APP_NAME; ?></title>
+    <title>News-Verwaltung - Admin</title>
     <style>
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
         }
-
+        
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #0f172a, #1e293b);
-            color: #e2e8f0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #0a0a0a;
+            color: #e0e0e0;
+            line-height: 1.6;
             min-height: 100vh;
         }
-
-        .header {
-            background: rgba(0, 0, 0, 0.3);
-            border-bottom: 1px solid rgba(59, 130, 246, 0.2);
-            padding: 1rem 2rem;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            backdrop-filter: blur(10px);
-        }
-
-        .header h1 {
-            color: #3b82f6;
-            font-size: 1.5rem;
-            font-weight: 600;
-        }
-
-        .breadcrumb {
-            font-size: 0.9rem;
-            opacity: 0.8;
-            margin-top: 0.25rem;
-        }
-
-        .breadcrumb a {
-            color: #3b82f6;
-            text-decoration: none;
-        }
-
-        .breadcrumb a:hover {
-            text-decoration: underline;
-        }
-
-        .btn {
-            padding: 0.5rem 1rem;
-            border: none;
-            border-radius: 0.5rem;
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 0.5rem;
-            font-size: 0.9rem;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            font-weight: 500;
-        }
-
-        .btn-secondary {
-            background: rgba(100, 116, 139, 0.2);
-            color: #cbd5e1;
-            border: 1px solid rgba(100, 116, 139, 0.3);
-        }
-
-        .btn-secondary:hover {
-            background: rgba(100, 116, 139, 0.3);
-        }
-
+        
         .container {
             max-width: 1200px;
             margin: 0 auto;
-            padding: 2rem;
+            padding: 20px;
         }
-
-        .coming-soon {
-            text-align: center;
-            padding: 4rem 2rem;
-            background: rgba(0, 0, 0, 0.4);
-            border: 1px solid rgba(59, 130, 246, 0.2);
-            border-radius: 2rem;
-            backdrop-filter: blur(10px);
+        
+        .header {
+            background-color: #1a1a1a;
+            padding: 30px;
+            border-radius: 10px;
+            margin-bottom: 30px;
+            border: 1px solid #333;
         }
-
-        .coming-soon .icon {
-            font-size: 5rem;
-            margin-bottom: 2rem;
-            color: #3b82f6;
-            animation: bounce 2s infinite;
+        
+        h1 {
+            color: #fff;
+            font-size: 2.5em;
+            margin-bottom: 10px;
         }
-
-        @keyframes bounce {
-            0%, 20%, 50%, 80%, 100% { transform: translateY(0); }
-            40% { transform: translateY(-10px); }
-            60% { transform: translateY(-5px); }
+        
+        .subtitle {
+            color: #888;
+            font-size: 1.1em;
         }
-
-        .coming-soon h2 {
-            font-size: 2.5rem;
-            color: #3b82f6;
-            margin-bottom: 1rem;
+        
+        .message {
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            animation: fadeIn 0.3s ease-in;
         }
-
-        .coming-soon p {
-            font-size: 1.1rem;
-            opacity: 0.8;
-            line-height: 1.6;
-            margin-bottom: 2rem;
-            max-width: 600px;
-            margin-left: auto;
-            margin-right: auto;
+        
+        .success {
+            background-color: #1a3a1a;
+            color: #4ade80;
+            border: 1px solid #22c55e;
         }
-
-        .features-preview {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 1.5rem;
-            margin-top: 3rem;
+        
+        .error {
+            background-color: #3a1a1a;
+            color: #f87171;
+            border: 1px solid #ef4444;
         }
-
-        .feature-card {
-            background: rgba(0, 0, 0, 0.3);
-            border: 1px solid rgba(100, 116, 139, 0.2);
-            border-radius: 1rem;
-            padding: 1.5rem;
-            text-align: left;
+        
+        .news-form {
+            background-color: #1a1a1a;
+            padding: 30px;
+            border-radius: 10px;
+            margin-bottom: 30px;
+            border: 1px solid #333;
         }
-
-        .feature-card .icon {
-            font-size: 2rem;
-            margin-bottom: 1rem;
-            color: #3b82f6;
+        
+        .form-group {
+            margin-bottom: 20px;
         }
-
-        .feature-card h3 {
-            color: #3b82f6;
-            margin-bottom: 0.5rem;
+        
+        label {
+            display: block;
+            color: #a0a0a0;
+            margin-bottom: 8px;
+            font-weight: 500;
         }
-
-        .feature-card p {
-            opacity: 0.8;
-            line-height: 1.5;
+        
+        input[type="text"],
+        input[type="date"],
+        textarea {
+            width: 100%;
+            padding: 12px;
+            background-color: #0a0a0a;
+            border: 1px solid #333;
+            border-radius: 6px;
+            color: #e0e0e0;
+            font-size: 16px;
+            transition: border-color 0.3s ease;
         }
-
-        .progress-section {
-            background: rgba(59, 130, 246, 0.1);
-            border: 1px solid rgba(59, 130, 246, 0.2);
-            border-radius: 1rem;
-            padding: 2rem;
-            margin-top: 3rem;
+        
+        input[type="text"]:focus,
+        input[type="date"]:focus,
+        textarea:focus {
+            outline: none;
+            border-color: #4a9eff;
         }
-
-        .progress-section h3 {
-            color: #3b82f6;
-            margin-bottom: 1rem;
+        
+        textarea {
+            min-height: 120px;
+            resize: vertical;
         }
-
-        .progress-bar {
-            background: rgba(0, 0, 0, 0.3);
+        
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        input[type="checkbox"] {
+            width: 20px;
             height: 20px;
+            cursor: pointer;
+        }
+        
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: inline-block;
+        }
+        
+        .btn-primary {
+            background-color: #4a9eff;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background-color: #357abd;
+            transform: translateY(-1px);
+        }
+        
+        .btn-danger {
+            background-color: #ef4444;
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            background-color: #dc2626;
+        }
+        
+        .news-list {
+            background-color: #1a1a1a;
+            padding: 30px;
             border-radius: 10px;
-            overflow: hidden;
-            margin-bottom: 1rem;
+            border: 1px solid #333;
         }
-
-        .progress-fill {
-            background: linear-gradient(90deg, #3b82f6, #1d4ed8);
-            height: 100%;
-            width: 25%;
-            border-radius: 10px;
-            animation: pulse 2s infinite;
+        
+        .news-item {
+            background-color: #0a0a0a;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            border: 1px solid #222;
+            transition: border-color 0.3s ease;
         }
-
-        @keyframes pulse {
-            0% { opacity: 1; }
-            50% { opacity: 0.7; }
-            100% { opacity: 1; }
+        
+        .news-item:hover {
+            border-color: #444;
         }
-
-        @media (max-width: 768px) {
-            .container {
-                padding: 1rem;
-            }
-            
-            .coming-soon {
-                padding: 2rem 1rem;
-            }
-            
-            .coming-soon h2 {
-                font-size: 2rem;
-            }
-            
-            .features-preview {
-                grid-template-columns: 1fr;
-            }
+        
+        .news-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 10px;
+        }
+        
+        .news-title {
+            font-size: 1.3em;
+            color: #fff;
+            margin-bottom: 5px;
+        }
+        
+        .news-meta {
+            color: #666;
+            font-size: 0.9em;
+        }
+        
+        .news-content {
+            color: #ccc;
+            margin: 15px 0;
+            white-space: pre-wrap;
+        }
+        
+        .news-stats {
+            display: flex;
+            gap: 20px;
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid #333;
+        }
+        
+        .stat-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #888;
+            font-size: 0.9em;
+        }
+        
+        .badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.8em;
+            font-weight: 500;
+        }
+        
+        .badge-important {
+            background-color: #991b1b;
+            color: #fca5a5;
+        }
+        
+        .badge-expires {
+            background-color: #1e3a8a;
+            color: #93bbfc;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .back-link {
+            display: inline-block;
+            color: #4a9eff;
+            text-decoration: none;
+            margin-bottom: 20px;
+            padding: 8px 16px;
+            border: 1px solid #4a9eff;
+            border-radius: 6px;
+            transition: all 0.3s ease;
+        }
+        
+        .back-link:hover {
+            background-color: #4a9eff;
+            color: white;
         }
     </style>
 </head>
 <body>
-    <div class="header">
-        <div>
-            <h1>📢 Mitteilungen</h1>
-            <div class="breadcrumb">
-                <a href="dashboard.php">Dashboard</a> / Mitteilungen
-            </div>
-        </div>
-        <a href="dashboard.php" class="btn btn-secondary">🏠 Dashboard</a>
-    </div>
-
     <div class="container">
-        <div class="coming-soon">
-            <div class="icon">📢</div>
-            <h2>Mitteilungssystem</h2>
-            <p>
-                Das Mitteilungssystem ist derzeit in Entwicklung. Hier werden Sie zukünftig 
-                Schulnachrichten verwalten, wichtige Ankündigungen erstellen und die 
-                Kommunikation mit Lehrern und Eltern koordinieren können.
-            </p>
-
-            <div class="progress-section">
-                <h3>Entwicklungsfortschritt</h3>
-                <div class="progress-bar">
-                    <div class="progress-fill"></div>
-                </div>
-                <p>25% - Konzeptphase abgeschlossen</p>
-            </div>
+        <a href="dashboard.php" class="back-link">← Zurück zum Dashboard</a>
+        
+        <div class="header">
+            <h1>News-Verwaltung</h1>
+            <p class="subtitle">Erstellen und verwalten Sie Nachrichten für alle Lehrer</p>
         </div>
-
-        <div class="features-preview">
-            <div class="feature-card">
-                <div class="icon">📨</div>
-                <h3>Nachrichtenverwaltung</h3>
-                <p>Erstellen, bearbeiten und versenden Sie wichtige Mitteilungen an Lehrer, Schüler und Eltern.</p>
-            </div>
-
-            <div class="feature-card">
-                <div class="icon">📅</div>
-                <h3>Terminankündigungen</h3>
-                <p>Informieren Sie über wichtige Termine, Veranstaltungen und schulische Events.</p>
-            </div>
-
-            <div class="feature-card">
-                <div class="icon">🔔</div>
-                <h3>Benachrichtigungen</h3>
-                <p>Automatische Benachrichtigungen bei wichtigen Ereignissen und Deadlines.</p>
-            </div>
-
-            <div class="feature-card">
-                <div class="icon">📊</div>
-                <h3>Lesebestätigungen</h3>
-                <p>Verfolgen Sie, wer Ihre Mitteilungen gelesen hat und wer noch erreicht werden muss.</p>
-            </div>
-
-            <div class="feature-card">
-                <div class="icon">🎯</div>
-                <h3>Zielgruppen</h3>
-                <p>Senden Sie gezielte Nachrichten an bestimmte Klassen, Lehrergruppen oder Jahrgänge.</p>
-            </div>
-
-            <div class="feature-card">
-                <div class="icon">📁</div>
-                <h3>Archivierung</h3>
-                <p>Archivieren und durchsuchen Sie alte Mitteilungen für eine lückenlose Dokumentation.</p>
-            </div>
+        
+        <?php if ($message): ?>
+            <div class="message success"><?php echo htmlspecialchars($message); ?></div>
+        <?php endif; ?>
+        
+        <?php if ($error): ?>
+            <div class="message error"><?php echo htmlspecialchars($error); ?></div>
+        <?php endif; ?>
+        
+        <div class="news-form">
+            <h2 style="margin-bottom: 20px;">Neue Nachricht erstellen</h2>
+            <form method="POST">
+                <div class="form-group">
+                    <label for="title">Titel der Nachricht</label>
+                    <input type="text" id="title" name="title" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="content">Nachrichtentext</label>
+                    <textarea id="content" name="content" required></textarea>
+                </div>
+                
+                <div class="form-group">
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="is_important" name="is_important">
+                        <label for="is_important" style="margin-bottom: 0;">Als wichtig markieren</label>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="expires_at">Zeitbegrenzt bis (optional)</label>
+                    <input type="date" id="expires_at" name="expires_at" min="<?php echo date('Y-m-d'); ?>">
+                </div>
+                
+                <button type="submit" name="create_news" class="btn btn-primary">Nachricht veröffentlichen</button>
+            </form>
+        </div>
+        
+        <div class="news-list">
+            <h2 style="margin-bottom: 20px;">Aktuelle Nachrichten</h2>
+            
+            <?php if (empty($news_list)): ?>
+                <p style="color: #666;">Keine Nachrichten vorhanden.</p>
+            <?php else: ?>
+                <?php foreach ($news_list as $news): ?>
+                    <div class="news-item">
+                        <div class="news-header">
+                            <div>
+                                <h3 class="news-title">
+                                    <?php echo htmlspecialchars($news['title']); ?>
+                                    <?php if ($news['is_important']): ?>
+                                        <span class="badge badge-important">Wichtig</span>
+                                    <?php endif; ?>
+                                    <?php if ($news['expires_at']): ?>
+                                        <span class="badge badge-expires">Läuft ab: <?php echo date('d.m.Y', strtotime($news['expires_at'])); ?></span>
+                                    <?php endif; ?>
+                                </h3>
+                                <p class="news-meta">Erstellt am <?php echo date('d.m.Y H:i', strtotime($news['created_at'])); ?></p>
+                            </div>
+                            <form method="POST" style="display: inline;" onsubmit="return confirm('Möchten Sie diese Nachricht wirklich löschen?');">
+                                <input type="hidden" name="news_id" value="<?php echo $news['id']; ?>">
+                                <button type="submit" name="delete_news" class="btn btn-danger">Löschen</button>
+                            </form>
+                        </div>
+                        
+                        <div class="news-content"><?php echo htmlspecialchars($news['content']); ?></div>
+                        
+                        <div class="news-stats">
+                            <div class="stat-item">
+                                <span>📖</span>
+                                <span><?php echo $news['read_count']; ?> von <?php echo $news['total_teachers']; ?> Lehrern haben gelesen</span>
+                            </div>
+                        </div>
+                    </div>
+                <?php endforeach; ?>
+            <?php endif; ?>
         </div>
     </div>
 </body>

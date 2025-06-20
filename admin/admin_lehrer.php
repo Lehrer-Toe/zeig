@@ -191,10 +191,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
                     $errors[] = 'Ungültige E-Mail-Adresse.';
                 } else {
-                    // Prüfen ob E-Mail bereits existiert
-                    $existingUser = getUserByEmail($email);
+                    // Prüfen ob E-Mail bereits existiert (auch bei inaktiven Benutzern)
+                    $stmt = $db->prepare("SELECT id, name, is_active FROM users WHERE email = ?");
+                    $stmt->execute([$email]);
+                    $existingUser = $stmt->fetch();
+                    
                     if ($existingUser) {
-                        $errors[] = 'Ein Benutzer mit dieser E-Mail-Adresse existiert bereits.';
+                        if ($existingUser['is_active']) {
+                            $errors[] = 'Ein Benutzer mit dieser E-Mail-Adresse existiert bereits.';
+                        } else {
+                            // Inaktiver Benutzer gefunden - reaktivieren statt neu anlegen
+                            if (empty($password)) {
+                                $password = generateSecurePassword();
+                            }
+                            $passwordHash = password_hash($password, PASSWORD_DEFAULT);
+                            
+                            $stmt = $db->prepare("
+                                UPDATE users 
+                                SET is_active = 1, 
+                                    password_hash = ?, 
+                                    name = ?, 
+                                    first_login = 1, 
+                                    password_set_by_admin = 1, 
+                                    admin_password = ?,
+                                    updated_at = CURRENT_TIMESTAMP 
+                                WHERE id = ?
+                            ");
+                            
+                            if ($stmt->execute([$passwordHash, $name, $password, $existingUser['id']])) {
+                                $messages[] = "Lehrer '$name' wurde erfolgreich reaktiviert. Passwort: $password";
+                            } else {
+                                $errors[] = 'Fehler beim Reaktivieren des Lehrers.';
+                            }
+                        }
                     } else {
                         // Automatisches Passwort generieren wenn keines eingegeben
                         if (empty($password)) {
@@ -366,9 +395,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 }
                                 
                                 if (!empty($name) && filter_var($email, FILTER_VALIDATE_EMAIL)) {
-                                    // Prüfen ob bereits vorhanden
-                                    $existingUser = getUserByEmail($email);
+                                    // Prüfen ob bereits vorhanden (auch inaktive)
+                                    $stmt = $db->prepare("SELECT id, is_active FROM users WHERE email = ?");
+                                    $stmt->execute([$email]);
+                                    $existingUser = $stmt->fetch();
+                                    
                                     if (!$existingUser) {
+                                        // Neuer Benutzer
                                         $password = generateSecurePassword();
                                         $passwordHash = password_hash($password, PASSWORD_DEFAULT);
                                         
@@ -380,6 +413,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                         if ($stmt->execute([$email, $passwordHash, $name, $user['school_id'], $password])) {
                                             $imported++;
                                             $passwordList[] = "$name ($email): $password";
+                                        }
+                                    } elseif (!$existingUser['is_active']) {
+                                        // Inaktiver Benutzer - reaktivieren
+                                        $password = generateSecurePassword();
+                                        $passwordHash = password_hash($password, PASSWORD_DEFAULT);
+                                        
+                                        $stmt = $db->prepare("
+                                            UPDATE users 
+                                            SET is_active = 1, 
+                                                password_hash = ?, 
+                                                name = ?, 
+                                                first_login = 1, 
+                                                password_set_by_admin = 1, 
+                                                admin_password = ?,
+                                                updated_at = CURRENT_TIMESTAMP 
+                                            WHERE id = ?
+                                        ");
+                                        
+                                        if ($stmt->execute([$passwordHash, $name, $password, $existingUser['id']])) {
+                                            $imported++;
+                                            $passwordList[] = "$name ($email) [reaktiviert]: $password";
                                         }
                                     } else {
                                         $skipped++;

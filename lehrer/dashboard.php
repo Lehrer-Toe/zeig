@@ -866,206 +866,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form_action']) && iss
     }
 }
 
-// Lehrerdaten und Schulinfo abrufen
-$db = getDB();
-$stmt = $db->prepare("
-    SELECT u.*, s.name as school_name, s.school_type
-    FROM users u
-    JOIN schools s ON u.school_id = s.id
-    WHERE u.id = ? AND u.user_type = 'lehrer'
-");
-$stmt->execute([$teacher_id]);
-$teacher = $stmt->fetch();
-
-if (!$teacher) {
-    die('Lehrerdaten konnten nicht geladen werden.');
-}
-
-
-// === BEWERTEN-FORMULARVERARBEITUNG (VOR HTML-AUSGABE!) ===
-// Dieser Code muss in dashboard.php VOR der HTML-Ausgabe eingefügt werden
-// Am besten nach den anderen Formularverarbeitungen (z.B. nach Themen/Gruppen)
-
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form_action']) && isset($_GET['page']) && $_GET['page'] === 'bewerten') {
-    try {
-        // CSRF-Token prüfen
-        if (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
-            throw new Exception('Ungültiger CSRF-Token');
-        }
-        
-        switch ($_POST['form_action']) {
-            case 'save_rating':
-                $student_id = (int)$_POST['student_id'];
-                $group_id = (int)$_POST['group_id'];
-                $template_id = (int)$_POST['template_id'];
-                $final_grade = isset($_POST['final_grade']) && $_POST['final_grade'] !== '' ? (float)$_POST['final_grade'] : null;
-                $category_ratings = $_POST['category_rating'] ?? [];
-                
-                // Berechtigung prüfen
-                $stmt = $db->prepare("
-                    SELECT COUNT(*) FROM group_students 
-                    WHERE student_id = ? AND group_id = ? AND examiner_teacher_id = ?
-                ");
-                $stmt->execute([$student_id, $group_id, $teacher_id]);
-                if (!$stmt->fetchColumn()) {
-                    throw new Exception('Keine Berechtigung für diese Aktion.');
-                }
-                
-                $db->beginTransaction();
-                
-                // Prüfen ob bereits eine Bewertung existiert
-                $stmt = $db->prepare("
-                    SELECT id FROM ratings 
-                    WHERE student_id = ? AND group_id = ? AND teacher_id = ?
-                ");
-                $stmt->execute([$student_id, $group_id, $teacher_id]);
-                $rating_id = $stmt->fetchColumn();
-                
-                if ($rating_id) {
-                    // Update bestehende Bewertung
-                    $stmt = $db->prepare("
-                        UPDATE ratings 
-                        SET template_id = ?, final_grade = ?, is_complete = ?, 
-                            rating_date = CURDATE(), updated_at = NOW()
-                        WHERE id = ?
-                    ");
-                    $is_complete = !empty($category_ratings) && $final_grade !== null ? 1 : 0;
-                    $stmt->execute([$template_id, $final_grade, $is_complete, $rating_id]);
-                } else {
-                    // Neue Bewertung erstellen - WICHTIG: criteria_id mit Standardwert setzen
-                    $stmt = $db->prepare("
-                        INSERT INTO ratings (student_id, teacher_id, group_id, template_id, 
-                                           final_grade, is_complete, rating_date, created_at, criteria_id, points)
-                        VALUES (?, ?, ?, ?, ?, ?, CURDATE(), NOW(), 1, 0)
-                    ");
-                    $is_complete = !empty($category_ratings) && $final_grade !== null ? 1 : 0;
-                    $stmt->execute([$student_id, $teacher_id, $group_id, $template_id, 
-                                  $final_grade, $is_complete]);
-                    $rating_id = $db->lastInsertId();
-                }
-                
-                // Alte Kategorie-Bewertungen löschen
-                $stmt = $db->prepare("DELETE FROM rating_categories WHERE rating_id = ?");
-                $stmt->execute([$rating_id]);
-                
-                // Neue Kategorie-Bewertungen speichern
-                if (!empty($category_ratings)) {
-                    $stmt = $db->prepare("
-                        INSERT INTO rating_categories (rating_id, category_id, points)
-                        VALUES (?, ?, ?)
-                    ");
-                    
-                    foreach ($category_ratings as $category_id => $points) {
-                        if ($points !== '') {
-                            $stmt->execute([$rating_id, (int)$category_id, (float)$points]);
-                        }
-                    }
-                }
-                
-                $db->commit();
-                $_SESSION['flash_message'] = 'Bewertung erfolgreich gespeichert.';
-                $_SESSION['flash_type'] = 'success';
-                
-                // Redirect je nach Button
-                $redirect_url = $_SERVER['PHP_SELF'] . '?page=bewerten';
-                if (isset($_POST['save_and_close'])) {
-                    // Zurück zur Übersicht
-                } else {
-                    // Auf der Bewertungsseite bleiben
-                    $redirect_url .= '&rate=' . $student_id . '&group=' . $group_id . '&tab=rating';
-                }
-                
-                header('Location: ' . $redirect_url);
-                exit();
-                
-                break;
-                
-            case 'save_strengths':
-                $student_id = (int)$_POST['student_id'];
-                $group_id = (int)$_POST['group_id'];
-                $strength_items = $_POST['strength_items'] ?? [];
-                
-                // Berechtigung prüfen
-                $stmt = $db->prepare("
-                    SELECT COUNT(*) FROM group_students 
-                    WHERE student_id = ? AND group_id = ? AND examiner_teacher_id = ?
-                ");
-                $stmt->execute([$student_id, $group_id, $teacher_id]);
-                if (!$stmt->fetchColumn()) {
-                    throw new Exception('Keine Berechtigung für diese Aktion.');
-                }
-                
-                $db->beginTransaction();
-                
-                // Prüfen ob bereits eine Bewertung existiert
-                $stmt = $db->prepare("
-                    SELECT id FROM ratings 
-                    WHERE student_id = ? AND group_id = ? AND teacher_id = ?
-                ");
-                $stmt->execute([$student_id, $group_id, $teacher_id]);
-                $rating_id = $stmt->fetchColumn();
-                
-                if (!$rating_id) {
-                    // Bewertung muss existieren bevor Stärken gespeichert werden können
-                    throw new Exception('Bitte speichern Sie zuerst die Bewertung.');
-                }
-                
-                // Alte Stärken löschen
-                $stmt = $db->prepare("DELETE FROM rating_strengths WHERE rating_id = ?");
-                $stmt->execute([$rating_id]);
-                
-                // Neue Stärken speichern
-                if (!empty($strength_items)) {
-                    $stmt = $db->prepare("
-                        INSERT INTO rating_strengths (rating_id, strength_item_id)
-                        VALUES (?, ?)
-                    ");
-                    
-                    foreach ($strength_items as $item_id) {
-                        $stmt->execute([$rating_id, (int)$item_id]);
-                    }
-                }
-                
-                $db->commit();
-                $_SESSION['flash_message'] = 'Stärken erfolgreich gespeichert.';
-                $_SESSION['flash_type'] = 'success';
-                
-                // Redirect je nach Button
-                $redirect_url = $_SERVER['PHP_SELF'] . '?page=bewerten';
-                if (isset($_POST['save_and_close'])) {
-                    // Zurück zur Übersicht
-                } else {
-                    // Auf der Stärken-Seite bleiben
-                    $redirect_url .= '&rate=' . $student_id . '&group=' . $group_id . '&tab=strengths';
-                }
-                
-                header('Location: ' . $redirect_url);
-                exit();
-                
-                break;
-        }
-        
-    } catch (Exception $e) {
-        if (isset($db) && $db->inTransaction()) {
-            $db->rollBack();
-        }
-        $_SESSION['flash_message'] = $e->getMessage();
-        $_SESSION['flash_type'] = 'error';
-        
-        // Bei Fehler auch redirect mit allen Parametern
-        $redirect_url = $_SERVER['PHP_SELF'] . '?page=bewerten';
-        if (isset($student_id) && isset($group_id)) {
-            $redirect_url .= '&rate=' . $student_id . '&group=' . $group_id;
-            if (isset($_POST['form_action']) && $_POST['form_action'] === 'save_strengths') {
-                $redirect_url .= '&tab=strengths';
-            }
-        }
-        
-        header('Location: ' . $redirect_url);
-        exit();
-    }
-}
-
 
 // === BEWERTEN-FORMULARVERARBEITUNG (VOR HTML-AUSGABE!) ===
 // Dieser Code muss in dashboard.php VOR der HTML-Ausgabe eingefügt werden
@@ -1223,9 +1023,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form_action']) && iss
                 // Redirect je nach Button
                 $redirect_url = $_SERVER['PHP_SELF'] . '?page=bewerten';
                 if (isset($_POST['save_and_close'])) {
-                    // Zurück zur Übersicht - Filter und Sort beibehalten
-                    if (isset($_GET['status'])) $redirect_url .= '&status=' . $_GET['status'];
-                    if (isset($_GET['sort'])) $redirect_url .= '&sort=' . $_GET['sort'];
+                    // Zurück zur Übersicht
                 } else {
                     // Auf der Stärken-Seite bleiben
                     $redirect_url .= '&rate=' . $student_id . '&group=' . $group_id . '&tab=strengths';
@@ -1301,6 +1099,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     header('Location: ?page=einstellungen');
     exit;
 }
+
+// Lehrerdaten und Schulinfo abrufen
+$db = getDB();
+$stmt = $db->prepare("
+    SELECT u.*, s.name as school_name, s.school_type
+    FROM users u
+    JOIN schools s ON u.school_id = s.id
+    WHERE u.id = ? AND u.user_type = 'lehrer'
+");
+$stmt->execute([$teacher_id]);
+$teacher = $stmt->fetch();
+
+if (!$teacher) {
+    die('Lehrerdaten konnten nicht geladen werden.');
+}
+
+// Datenbankverbindung für PDO anpassen (falls deine DB-Klasse anders heißt)
+$pdo = $db;
 
 ?>
 <!DOCTYPE html>
@@ -1581,27 +1397,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             <?php
             switch ($page) {
                 case 'news':
-                    echo '<div class="welcome-message">';
-                    echo '<h2>Willkommen, ' . htmlspecialchars($teacher['name']) . '!</h2>';
-                    echo '<p>Hier finden Sie aktuelle Informationen und Neuigkeiten rund um das Bewertungssystem.</p>';
-                    echo '</div>';
-                    
-                    echo '<div class="content-section">';
-                    echo '<h3>📰 Aktuelle News</h3>';
-                    echo '<div class="news-item">';
-                    echo '<h4>System erfolgreich eingerichtet</h4>';
-                    echo '<p>Das Bewertungssystem wurde erfolgreich für Ihre Schule konfiguriert.</p>';
-                    echo '<small>Heute</small>';
-                    echo '</div>';
-                    echo '<div class="news-item">';
-                    echo '<h4>Erste Schritte</h4>';
-                    echo '<p>Beginnen Sie mit der Erstellung von Themen und Bewertungsvorlagen.</p>';
-                    echo '<small>Heute</small>';
-                    echo '</div>';
-                    echo '</div>';
-                    echo '<div style="text-align: center;">';
-                    echo '<a href="?page=themen" class="action-button">Jetzt starten →</a>';
-                    echo '</div>';
+                    // News-Modul einbinden
+                    if (file_exists('lehrer_news_include.php')) {
+                        include 'lehrer_news_include.php';
+                    } else {
+                        // Fallback wenn das News-Modul noch nicht existiert
+                        echo '<div class="welcome-message">';
+                        echo '<h2>Willkommen, ' . htmlspecialchars($teacher['name']) . '!</h2>';
+                        echo '<p>Hier finden Sie aktuelle Informationen und Neuigkeiten rund um das Bewertungssystem.</p>';
+                        echo '</div>';
+                        
+                        echo '<div class="content-section">';
+                        echo '<h3>📰 Aktuelle News</h3>';
+                        echo '<div class="news-item">';
+                        echo '<h4>System erfolgreich eingerichtet</h4>';
+                        echo '<p>Das Bewertungssystem wurde erfolgreich für Ihre Schule konfiguriert.</p>';
+                        echo '<small>Heute</small>';
+                        echo '</div>';
+                        echo '<div class="news-item">';
+                        echo '<h4>Erste Schritte</h4>';
+                        echo '<p>Beginnen Sie mit der Erstellung von Themen und Bewertungsvorlagen.</p>';
+                        echo '<small>Heute</small>';
+                        echo '</div>';
+                        echo '</div>';
+                        echo '<div style="text-align: center;">';
+                        echo '<a href="?page=themen" class="action-button">Jetzt starten →</a>';
+                        echo '</div>';
+                    }
                     break;
                     
                 case 'themen':
@@ -1664,20 +1486,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     }
                     break;
 
-case 'einstellungen':
-    // Einstellungen-Modul einbinden
-    if (file_exists('lehrer_einstellungen_include.php')) {
-        include 'lehrer_einstellungen_include.php';
-    } else {
-        echo '<div class="content-section">';
-        echo '<div class="empty-state">';
-        echo '<span class="empty-state-icon">⚠️</span>';
-        echo '<h3>Einstellungen-Modul nicht gefunden</h3>';
-        echo '<p>Die Datei lehrer_einstellungen_include.php konnte nicht geladen werden.</p>';
-        echo '</div>';
-        echo '</div>';
-    }
-    break;
+                case 'einstellungen':
+                    // Einstellungen-Modul einbinden
+                    if (file_exists('lehrer_einstellungen_include.php')) {
+                        include 'lehrer_einstellungen_include.php';
+                    } else {
+                        echo '<div class="content-section">';
+                        echo '<div class="empty-state">';
+                        echo '<span class="empty-state-icon">⚠️</span>';
+                        echo '<h3>Einstellungen-Modul nicht gefunden</h3>';
+                        echo '<p>Die Datei lehrer_einstellungen_include.php konnte nicht geladen werden.</p>';
+                        echo '</div>';
+                        echo '</div>';
+                    }
+                    break;
 
                 default:
                     echo '<div class="content-section">';
