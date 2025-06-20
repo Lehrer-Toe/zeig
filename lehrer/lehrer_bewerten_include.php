@@ -1032,10 +1032,10 @@ if (!$last_template_id) {
                                     <?= $student['rating_id'] ? 'Bewertung bearbeiten' : 'Bewerten' ?>
                                 </a>
                                 
-                                <?php if ($student['rating_id'] && $student['is_complete']): ?>
+                                 <?php if ($student['rating_id'] && $student['is_complete']): ?>
                                     <a href="generate_pdf.php?rating=<?= $student['rating_id'] ?>" 
                                        class="btn btn-danger btn-sm" target="_blank">
-                                        PDF
+                                        DOCX
                                     </a>
                                 <?php endif; ?>
                             </form>

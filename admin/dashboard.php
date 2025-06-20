@@ -1,44 +1,37 @@
 <?php
 require_once '../config.php';
 
-// Null-sichere escape() Funktion
-if (!function_exists('escape')) {
-    function escape($string) {
-        if ($string === null || $string === '') {
-            return '';
-        }
-        return htmlspecialchars($string, ENT_QUOTES, 'UTF-8');
-    }
+// Überprüfung ob Benutzer eingeloggt und Admin ist
+if (!isset($_SESSION['user_id']) || $_SESSION['user_type'] !== 'schuladmin') {
+    header("Location: ../index.php");
+    exit();
 }
 
-// Schuladmin-Zugriff prüfen
-$user = requireSchuladmin();
+$adminId = $_SESSION['user_id'];
+$schoolId = $_SESSION['school_id'];
+$db = getDB();
 
-// Sicherstellen, dass 'name' existiert
-if (!isset($user['name']) || $user['name'] === null) {
-    $user['name'] = $user['email'] ?? 'Unbekannter Benutzer';
-}
+// Schulinformationen abrufen
+$stmt = $db->prepare("SELECT * FROM schools WHERE id = ?");
+$stmt->execute([$schoolId]);
+$school = $stmt->fetch();
 
-// Schuldaten laden
-$school = getSchoolById($user['school_id']);
 if (!$school) {
     die('Schule nicht gefunden.');
 }
 
-// Statistiken laden
-$db = getDB();
-
-// Klassen-Statistiken
+// Statistiken
+// Anzahl Klassen
 $stmt = $db->prepare("SELECT COUNT(*) as count FROM classes WHERE school_id = ? AND is_active = 1");
-$stmt->execute([$user['school_id']]);
+$stmt->execute([$schoolId]);
 $classCount = $stmt->fetch()['count'];
 
-// Lehrer-Statistiken
+// Anzahl Lehrer
 $stmt = $db->prepare("SELECT COUNT(*) as count FROM users WHERE school_id = ? AND user_type = 'lehrer' AND is_active = 1");
-$stmt->execute([$user['school_id']]);
+$stmt->execute([$schoolId]);
 $teacherCount = $stmt->fetch()['count'];
 
-// Schüler-Statistiken - nur aus aktiven Klassen
+// Anzahl Schüler (nur aus aktiven Klassen)
 $stmt = $db->prepare("
     SELECT COUNT(*) as count 
     FROM students s 
@@ -47,43 +40,49 @@ $stmt = $db->prepare("
     AND s.is_active = 1 
     AND c.is_active = 1
 ");
-$stmt->execute([$user['school_id']]);
+$stmt->execute([$schoolId]);
 $studentCount = $stmt->fetch()['count'];
 
-// Bewertungen-Statistiken
-$stmt = $db->prepare("
-    SELECT COUNT(*) as count 
-    FROM ratings r 
-    JOIN students s ON r.student_id = s.id 
-    WHERE s.school_id = ?
-");
-$stmt->execute([$user['school_id']]);
+// Anzahl Bewertungen
+$stmt = $db->prepare("SELECT COUNT(*) as count FROM ratings r JOIN students s ON r.student_id = s.id WHERE s.school_id = ?");
+$stmt->execute([$schoolId]);
 $ratingCount = $stmt->fetch()['count'];
 
-// Flash-Message
-$flashMessage = getFlashMessage();
+// Flash Messages
+$flashMessage = null;
+$flashType = null;
+if (isset($_SESSION['flash_message'])) {
+    $flashMessage = $_SESSION['flash_message'];
+    $flashType = $_SESSION['flash_type'] ?? 'success';
+    unset($_SESSION['flash_message']);
+    unset($_SESSION['flash_type']);
+}
 
-// Lizenz-Status prüfen
-$licenseStatus = 'active';
-$daysUntilExpiry = 0;
+// Lizenzstatus prüfen
+$licenseExpired = false;
+$licenseWarning = false;
+$daysRemaining = 0;
+
 if ($school['license_until']) {
-    $expiryDate = new DateTime($school['license_until']);
+    $licenseDate = new DateTime($school['license_until']);
     $today = new DateTime();
-    $daysUntilExpiry = $today->diff($expiryDate)->days;
+    $interval = $today->diff($licenseDate);
+    $daysRemaining = $interval->days;
     
-    if ($expiryDate < $today) {
-        $licenseStatus = 'expired';
-    } elseif ($daysUntilExpiry <= 30) {
-        $licenseStatus = 'expiring';
+    if ($today > $licenseDate) {
+        $licenseExpired = true;
+    } elseif ($daysRemaining <= 30) {
+        $licenseWarning = true;
     }
 }
 ?>
+
 <!DOCTYPE html>
 <html lang="de">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Schuladmin Dashboard - <?php echo APP_NAME; ?></title>
+    <title>Admin Dashboard - <?php echo htmlspecialchars($school['name']); ?></title>
     <style>
         * {
             margin: 0;
@@ -108,16 +107,10 @@ if ($school['license_until']) {
             backdrop-filter: blur(10px);
         }
 
-        .header-left h1 {
+        .header h1 {
             color: #3b82f6;
             font-size: 1.5rem;
             font-weight: 600;
-            margin-bottom: 0.25rem;
-        }
-
-        .school-info {
-            font-size: 0.9rem;
-            opacity: 0.8;
         }
 
         .user-info {
@@ -161,6 +154,23 @@ if ($school['license_until']) {
             padding: 2rem;
         }
 
+        .welcome-section {
+            margin-bottom: 2rem;
+        }
+
+        .welcome-title {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #60a5fa;
+            margin-bottom: 0.5rem;
+        }
+
+        .welcome-text {
+            font-size: 1.1rem;
+            opacity: 0.8;
+            line-height: 1.6;
+        }
+
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
@@ -180,13 +190,14 @@ if ($school['license_until']) {
         .stat-card:hover {
             border-color: #3b82f6;
             transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
         }
 
         .stat-header {
             display: flex;
             align-items: center;
             gap: 0.75rem;
-            margin-bottom: 1rem;
+            margin-bottom: 0.5rem;
         }
 
         .stat-icon {
@@ -195,7 +206,7 @@ if ($school['license_until']) {
 
         .stat-title {
             font-size: 0.9rem;
-            opacity: 0.8;
+            opacity: 0.7;
         }
 
         .stat-number {
@@ -336,77 +347,37 @@ if ($school['license_until']) {
             border: 1px solid rgba(239, 68, 68, 0.3);
             color: #fca5a5;
         }
-
-        .welcome-section {
-            margin-bottom: 3rem;
-        }
-
-        .welcome-title {
-            font-size: 1.8rem;
-            margin-bottom: 0.5rem;
-            color: #3b82f6;
-        }
-
-        .welcome-text {
-            opacity: 0.8;
-            line-height: 1.6;
-        }
-
-        @media (max-width: 768px) {
-            .container {
-                padding: 1rem;
-            }
-            
-            .stats-grid {
-                grid-template-columns: 1fr;
-            }
-            
-            .modules-grid {
-                grid-template-columns: 1fr;
-            }
-            
-            .header {
-                flex-direction: column;
-                gap: 1rem;
-                text-align: center;
-            }
-        }
     </style>
 </head>
 <body>
     <div class="header">
-        <div class="header-left">
-            <h1>🏫 Schuladmin Dashboard</h1>
-            <div class="school-info"><?php echo escape($school['name']); ?> - <?php echo escape($school['location']); ?></div>
-        </div>
+        <h1>🎓 Admin Dashboard - <?php echo htmlspecialchars($school['name']); ?></h1>
         <div class="user-info">
-            <span>👋 <?php echo escape($user['name']); ?></span>
-            <a href="../logout.php" class="btn btn-secondary">Abmelden</a>
+            <span>👋 Admin</span>
+            <a href="../logout.php" class="btn btn-secondary">🚪 Abmelden</a>
         </div>
     </div>
 
     <div class="container">
         <?php if ($flashMessage): ?>
-            <div class="flash-message flash-<?php echo $flashMessage['type']; ?>">
-                <?php echo escape($flashMessage['message']); ?>
+            <div class="flash-message flash-<?php echo $flashType; ?>">
+                <?php echo htmlspecialchars($flashMessage); ?>
             </div>
         <?php endif; ?>
 
-        <?php if ($licenseStatus === 'expired'): ?>
+        <?php if ($licenseExpired): ?>
             <div class="license-warning license-expired">
                 <span style="font-size: 1.5rem;">⚠️</span>
                 <div>
-                    <strong>Lizenz abgelaufen!</strong><br>
-                    Ihre Schullizenz ist seit dem <?php echo formatDate($school['license_until']); ?> abgelaufen. 
-                    Kontaktieren Sie den Administrator.
+                    <strong>Lizenz abgelaufen!</strong> Ihre Lizenz ist am <?php echo date('d.m.Y', strtotime($school['license_until'])); ?> abgelaufen.
+                    Bitte kontaktieren Sie den Support zur Verlängerung.
                 </div>
             </div>
-        <?php elseif ($licenseStatus === 'expiring'): ?>
+        <?php elseif ($licenseWarning): ?>
             <div class="license-warning">
                 <span style="font-size: 1.5rem;">⏰</span>
                 <div>
-                    <strong>Lizenz läuft ab!</strong><br>
-                    Ihre Schullizenz läuft in <?php echo $daysUntilExpiry; ?> Tag(en) ab (<?php echo formatDate($school['license_until']); ?>). 
+                    <strong>Lizenz läuft bald ab!</strong> Ihre Lizenz läuft in <?php echo $daysRemaining; ?> Tagen ab (<?php echo date('d.m.Y', strtotime($school['license_until'])); ?>).
                     Verlängern Sie rechtzeitig.
                 </div>
             </div>
@@ -529,15 +500,15 @@ if ($school['license_until']) {
                 <div class="module-header">
                     <div class="module-icon">📝</div>
                     <div>
-                        <div class="module-title">Berichtswesen</div>
-                        <div class="module-subtitle">Reports & Dokumente</div>
+                        <div class="module-title">Dokumentvorlagen</div>
+                        <div class="module-subtitle">Zeugnisse & Berichte</div>
                     </div>
                 </div>
                 <div class="module-description">
-                    Erstellen Sie Berichte, exportieren Sie Daten und generieren Sie Übersichten für die Schulleitung.
+                    Verwalten Sie Dokumentvorlagen mit Platzhaltern für automatisierte Zeugniserstellung.
                 </div>
                 <div class="module-status">
-                    <span class="status-badge status-coming-soon">Geplant</span>
+                    <span class="status-badge status-active">Verfügbar</span>
                 </div>
             </a>
 
