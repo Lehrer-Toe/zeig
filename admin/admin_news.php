@@ -71,36 +71,21 @@ try {
     $error = "Fehler beim Abrufen der Nachrichten: " . $e->getMessage();
     $news_list = [];
 }
-
-// Flash-Messages verarbeiten
-if (isset($_SESSION['flash_message'])) {
-    $message = $_SESSION['flash_message'];
-    unset($_SESSION['flash_message']);
-}
-if (isset($_SESSION['flash_error'])) {
-    $error = $_SESSION['flash_error'];
-    unset($_SESSION['flash_error']);
-}
 ?>
+
 <!DOCTYPE html>
 <html lang="de">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>News-Verwaltung - Admin</title>
+    <title>Admin News - Zeig, was du kannst!</title>
+    <link rel="stylesheet" href="../css/admin_styles.css">
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
+        /* Sunset Theme Anpassungen */
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background-color: #0a0a0a;
+            background-color: #0a0f1b;
             color: #e0e0e0;
-            line-height: 1.6;
-            min-height: 100vh;
+            font-family: 'Arial', sans-serif;
         }
         
         .container {
@@ -109,50 +94,42 @@ if (isset($_SESSION['flash_error'])) {
             padding: 20px;
         }
         
-        .header {
-            background-color: #1a1a1a;
-            padding: 30px;
-            border-radius: 10px;
-            margin-bottom: 30px;
-            border: 1px solid #333;
-        }
-        
         h1 {
-            color: #fff;
-            font-size: 2.5em;
-            margin-bottom: 10px;
-        }
-        
-        .subtitle {
-            color: #888;
-            font-size: 1.1em;
-        }
-        
-        .message {
-            padding: 15px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-            animation: fadeIn 0.3s ease-in;
-        }
-        
-        .success {
-            background-color: #1a3a1a;
-            color: #4ade80;
-            border: 1px solid #22c55e;
-        }
-        
-        .error {
-            background-color: #3a1a1a;
-            color: #f87171;
-            border: 1px solid #ef4444;
-        }
-        
-        .news-form {
-            background-color: #1a1a1a;
-            padding: 30px;
-            border-radius: 10px;
+            color: #f4a460;
             margin-bottom: 30px;
-            border: 1px solid #333;
+            font-size: 28px;
+        }
+        
+        h2 {
+            color: #8fb1d9;
+            font-size: 22px;
+        }
+        
+        .alert {
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 5px;
+            font-weight: 500;
+        }
+        
+        .alert-success {
+            background-color: #1b4332;
+            color: #95d5b2;
+            border: 1px solid #2d6a4f;
+        }
+        
+        .alert-error {
+            background-color: #5c1f1f;
+            color: #f8b4b4;
+            border: 1px solid #8b3333;
+        }
+        
+        .form-section {
+            background-color: #1a2332;
+            padding: 25px;
+            border-radius: 8px;
+            margin-bottom: 30px;
+            border: 1px solid #2d3f55;
         }
         
         .form-group {
@@ -161,33 +138,33 @@ if (isset($_SESSION['flash_error'])) {
         
         label {
             display: block;
-            color: #a0a0a0;
             margin-bottom: 8px;
+            color: #b8d4e8;
             font-weight: 500;
         }
         
         input[type="text"],
-        input[type="date"],
-        textarea {
+        textarea,
+        input[type="date"] {
             width: 100%;
-            padding: 12px;
-            background-color: #0a0a0a;
-            border: 1px solid #333;
-            border-radius: 6px;
+            padding: 10px;
+            border: 1px solid #3a4f65;
+            background-color: #0f1824;
             color: #e0e0e0;
-            font-size: 16px;
-            transition: border-color 0.3s ease;
+            border-radius: 4px;
+            font-size: 14px;
         }
         
         input[type="text"]:focus,
-        input[type="date"]:focus,
-        textarea:focus {
+        textarea:focus,
+        input[type="date"]:focus {
             outline: none;
-            border-color: #4a9eff;
+            border-color: #5a8fc0;
+            background-color: #1a2532;
         }
         
         textarea {
-            min-height: 120px;
+            min-height: 100px;
             resize: vertical;
         }
         
@@ -198,138 +175,129 @@ if (isset($_SESSION['flash_error'])) {
         }
         
         input[type="checkbox"] {
-            width: 20px;
-            height: 20px;
+            width: 18px;
+            height: 18px;
             cursor: pointer;
         }
         
         .btn {
-            padding: 12px 24px;
+            padding: 10px 20px;
             border: none;
-            border-radius: 6px;
-            font-size: 16px;
-            font-weight: 500;
+            border-radius: 5px;
             cursor: pointer;
+            font-weight: 500;
             transition: all 0.3s ease;
-            display: inline-block;
         }
         
         .btn-primary {
-            background-color: #4a9eff;
+            background-color: #3b7ea8;
             color: white;
         }
         
         .btn-primary:hover {
-            background-color: #357abd;
+            background-color: #4a95c9;
             transform: translateY(-1px);
         }
         
         .btn-danger {
-            background-color: #ef4444;
+            background-color: #d32f2f;
             color: white;
+            padding: 5px 15px;
+            font-size: 13px;
         }
         
         .btn-danger:hover {
-            background-color: #dc2626;
+            background-color: #e53935;
         }
         
         .news-list {
-            background-color: #1a1a1a;
-            padding: 30px;
-            border-radius: 10px;
-            border: 1px solid #333;
+            background-color: #1a2332;
+            padding: 25px;
+            border-radius: 8px;
+            border: 1px solid #2d3f55;
         }
         
         .news-item {
-            background-color: #0a0a0a;
+            background-color: #243447;
             padding: 20px;
-            border-radius: 8px;
-            margin-bottom: 15px;
-            border: 1px solid #222;
-            transition: border-color 0.3s ease;
-        }
-        
-        .news-item:hover {
-            border-color: #444;
+            margin-bottom: 20px;
+            border-radius: 6px;
+            border: 1px solid #35495e;
         }
         
         .news-header {
             display: flex;
             justify-content: space-between;
             align-items: start;
-            margin-bottom: 10px;
+            margin-bottom: 15px;
         }
         
         .news-title {
-            font-size: 1.3em;
-            color: #fff;
-            margin-bottom: 5px;
+            font-size: 18px;
+            color: #f4a460;
+            margin: 0 0 5px 0;
         }
         
         .news-meta {
-            color: #666;
-            font-size: 0.9em;
+            font-size: 13px;
+            color: #8fb1d9;
         }
         
         .news-content {
-            color: #ccc;
-            margin: 15px 0;
-            white-space: pre-wrap;
+            color: #e0e0e0;
+            line-height: 1.6;
+            margin-bottom: 15px;
+            padding: 10px;
+            background-color: #1a2332;
+            border-radius: 4px;
+        }
+        
+        .badge {
+            display: inline-block;
+            padding: 3px 8px;
+            font-size: 11px;
+            border-radius: 3px;
+            margin-left: 10px;
+            font-weight: normal;
+        }
+        
+        .badge-important {
+            background-color: #d32f2f;
+            color: white;
+        }
+        
+        .badge-expires {
+            background-color: #f57c00;
+            color: white;
         }
         
         .news-stats {
-            display: flex;
-            gap: 20px;
-            margin-top: 15px;
-            padding-top: 15px;
-            border-top: 1px solid #333;
+            background-color: #1a2332;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 10px;
         }
         
         .stat-item {
             display: flex;
             align-items: center;
             gap: 8px;
-            color: #888;
-            font-size: 0.9em;
+            font-size: 14px;
+            color: #8fb1d9;
         }
         
-        .badge {
-            display: inline-block;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 0.8em;
-            font-weight: 500;
-        }
-        
-        .badge-important {
-            background-color: #991b1b;
-            color: #fca5a5;
-        }
-        
-        .badge-expires {
-            background-color: #1e3a8a;
-            color: #93bbfc;
-        }
-        
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(-10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
+        /* Zurück-Link Styling */
         .back-link {
             display: inline-block;
-            color: #4a9eff;
-            text-decoration: none;
             margin-bottom: 20px;
-            padding: 8px 16px;
-            border: 1px solid #4a9eff;
-            border-radius: 6px;
-            transition: all 0.3s ease;
+            color: #5a8fc0;
+            text-decoration: none;
+            font-weight: 500;
+            transition: color 0.3s ease;
         }
         
         .back-link:hover {
-            background-color: #4a9eff;
-            color: white;
+            color: #7db3e0;
         }
     </style>
 </head>
@@ -337,35 +305,32 @@ if (isset($_SESSION['flash_error'])) {
     <div class="container">
         <a href="dashboard.php" class="back-link">← Zurück zum Dashboard</a>
         
-        <div class="header">
-            <h1>News-Verwaltung</h1>
-            <p class="subtitle">Erstellen und verwalten Sie Nachrichten für alle Lehrer</p>
-        </div>
+        <h1>Admin News verwalten</h1>
         
         <?php if ($message): ?>
-            <div class="message success"><?php echo htmlspecialchars($message); ?></div>
+            <div class="alert alert-success"><?php echo htmlspecialchars($message); ?></div>
         <?php endif; ?>
         
         <?php if ($error): ?>
-            <div class="message error"><?php echo htmlspecialchars($error); ?></div>
+            <div class="alert alert-error"><?php echo htmlspecialchars($error); ?></div>
         <?php endif; ?>
         
-        <div class="news-form">
-            <h2 style="margin-bottom: 20px;">Neue Nachricht erstellen</h2>
+        <div class="form-section">
+            <h2>Neue Nachricht erstellen</h2>
             <form method="POST">
                 <div class="form-group">
-                    <label for="title">Titel der Nachricht</label>
+                    <label for="title">Titel *</label>
                     <input type="text" id="title" name="title" required>
                 </div>
                 
                 <div class="form-group">
-                    <label for="content">Nachrichtentext</label>
+                    <label for="content">Inhalt *</label>
                     <textarea id="content" name="content" required></textarea>
                 </div>
                 
                 <div class="form-group">
                     <div class="checkbox-group">
-                        <input type="checkbox" id="is_important" name="is_important">
+                        <input type="checkbox" id="is_important" name="is_important" value="1">
                         <label for="is_important" style="margin-bottom: 0;">Als wichtig markieren</label>
                     </div>
                 </div>

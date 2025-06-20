@@ -9,8 +9,11 @@ if (!isset($_SESSION['user_id']) || $_SESSION['user_type'] !== 'lehrer') {
     exit;
 }
 
-// Datenbankverbindung einbinden (relativer Pfad anpassen je nach Verzeichnisstruktur)
-require_once '../../config/database.php';
+// Datenbankverbindung einbinden - Korrigierter Pfad
+require_once '../../config.php';
+
+// Datenbankverbindung holen
+$pdo = getDB();
 
 // JSON-Daten empfangen
 $input = json_decode(file_get_contents('php://input'), true);
@@ -43,6 +46,6 @@ try {
     
 } catch (PDOException $e) {
     http_response_code(500);
-    echo json_encode(['success' => false, 'message' => 'Datenbankfehler']);
+    echo json_encode(['success' => false, 'message' => 'Datenbankfehler: ' . $e->getMessage()]);
 }
 ?>

@@ -92,6 +92,41 @@ $activities = $stmt->fetchAll(PDO::FETCH_ASSOC);
 ?>
 
 <div class="news-container">
+    <!-- Dashboard Statistiken (IMMER OBEN) -->
+    <div class="dashboard-stats">
+        <h3>Dashboard Übersicht</h3>
+        <div class="stats-grid">
+            <div class="stat-box">
+                <div class="stat-icon">👥</div>
+                <div class="stat-content">
+                    <div class="stat-number"><?= $students_to_rate ?></div>
+                    <div class="stat-label">Schüler zu bewerten</div>
+                </div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-icon">✅</div>
+                <div class="stat-content">
+                    <div class="stat-number"><?= $students_rated ?></div>
+                    <div class="stat-label">Bereits bewertet</div>
+                </div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-icon">📋</div>
+                <div class="stat-content">
+                    <div class="stat-number"><?= $group_count ?></div>
+                    <div class="stat-label">Gruppen als Prüfer</div>
+                </div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-icon">📊</div>
+                <div class="stat-content">
+                    <div class="stat-number"><?= $students_to_rate > 0 ? round(($students_rated / $students_to_rate) * 100) : 100 ?>%</div>
+                    <div class="stat-label">Fortschritt</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Admin News (falls vorhanden) -->
     <?php if (!empty($admin_news)): ?>
         <div class="admin-news-section">
@@ -102,72 +137,40 @@ $activities = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 </button>
             </div>
             <?php foreach ($admin_news as $news): ?>
-                <div class="admin-news-item <?= $news['is_important'] ? 'important' : '' ?>" data-news-id="<?= $news['id'] ?>">
-                    <div class="news-header-row">
+                <div class="admin-news-item <?= $news['is_important'] ? 'news-important' : '' ?>" data-news-id="<?= $news['id'] ?>">
+                    <div class="news-header">
                         <h4><?= htmlspecialchars($news['title']) ?></h4>
-                        <button class="close-btn" onclick="markNewsAsRead(<?= $news['id'] ?>)">✕</button>
+                        <button class="news-close-btn" onclick="markNewsAsRead(<?= $news['id'] ?>)">✕</button>
                     </div>
-                    <p class="news-content"><?= nl2br(htmlspecialchars($news['content'])) ?></p>
-                    <div class="news-meta">
-                        <span>Von <?= htmlspecialchars($news['created_by_name']) ?></span>
-                        <span><?= date('d.m.Y - H:i', strtotime($news['created_at'])) ?> Uhr</span>
+                    <div class="news-body">
+                        <p><?= nl2br(htmlspecialchars($news['content'])) ?></p>
+                        <div class="news-footer">
+                            <span class="news-author">Von: <?= htmlspecialchars($news['created_by_name']) ?></span>
+                            <span class="news-date"><?= date('d.m.Y - H:i', strtotime($news['created_at'])) ?> Uhr</span>
+                        </div>
                     </div>
                 </div>
             <?php endforeach; ?>
         </div>
     <?php endif; ?>
-
-    <div class="news-header">
-        <h2>Dashboard & Aktivitäten</h2>
-        <div class="stats-row">
-            <div class="stat-item">
-                <span class="stat-number"><?= $students_to_rate ?></span>
-                <span class="stat-label">Zu bewerten</span>
-            </div>
-            <div class="stat-item">
-                <span class="stat-number"><?= $students_rated ?></span>
-                <span class="stat-label">Bewertet</span>
-            </div>
-            <div class="stat-item">
-                <span class="stat-number"><?= $group_count ?></span>
-                <span class="stat-label">Gruppen als Prüfer</span>
-            </div>
-            <div class="stat-item">
-                <span class="stat-number"><?= round(($students_rated / max($students_to_rate, 1)) * 100) ?>%</span>
-                <span class="stat-label">Fortschritt</span>
-            </div>
-        </div>
-        
-        <!-- Fortschrittsbalken -->
-        <div class="progress-container">
-            <div class="progress-bar" style="width: <?= round(($students_rated / max($students_to_rate, 1)) * 100) ?>%"></div>
-        </div>
-    </div>
     
-    <div class="news-list">
+    <!-- Letzte Aktivitäten -->
+    <div class="activities-section">
         <h3>Letzte Aktivitäten</h3>
         <?php if (empty($activities)): ?>
-            <div class="empty-state">
-                <div class="empty-icon">📋</div>
-                <p>Noch keine Aktivitäten vorhanden.</p>
-                <p>Beginnen Sie mit dem Erstellen von Gruppen oder der Bewertung von Schülern.</p>
-            </div>
+            <p class="no-activities">Keine aktuellen Aktivitäten vorhanden.</p>
         <?php else: ?>
             <?php foreach ($activities as $activity): ?>
-                <div class="news-item" data-activity-id="<?= htmlspecialchars($activity['activity_id']) ?>">
-                    <div class="news-badge badge-<?= $activity['type'] ?>">
-                        <?php 
-                        $badges = [
-                            'bewertung' => '📊 Bewertung',
-                            'zuweisung' => '📌 Zuweisung'
-                        ];
-                        echo $badges[$activity['type']] ?? '📄 Aktivität';
+                <div class="activity-item" data-activity-id="<?= $activity['activity_id'] ?>">
+                    <div class="activity-icon">
+                        <?= $activity['type'] === 'bewertung' ? '✅' : 
+                           ($activity['type'] === 'zuweisung' ? '👤' : '📄');
                         ?>
                     </div>
-                    <div class="news-content">
-                        <p class="news-message"><?= htmlspecialchars($activity['message']) ?></p>
+                    <div class="activity-content">
+                        <p class="activity-message"><?= htmlspecialchars($activity['message']) ?></p>
                         <?php if ($activity['extra_info']): ?>
-                            <p class="news-extra">
+                            <p class="activity-extra">
                                 <?php if ($activity['type'] === 'bewertung'): ?>
                                     Note: <?= htmlspecialchars($activity['extra_info']) ?>
                                 <?php elseif ($activity['type'] === 'zuweisung'): ?>
@@ -175,13 +178,13 @@ $activities = $stmt->fetchAll(PDO::FETCH_ASSOC);
                                 <?php endif; ?>
                             </p>
                         <?php endif; ?>
-                        <p class="news-date"><?= date('d.m.Y - H:i', strtotime($activity['date'])) ?> Uhr</p>
+                        <p class="activity-date"><?= date('d.m.Y - H:i', strtotime($activity['date'])) ?> Uhr</p>
                     </div>
                     <button class="activity-close-btn" onclick="hideActivity('<?= htmlspecialchars($activity['activity_id']) ?>')">✕</button>
                 </div>
             <?php endforeach; ?>
-            <div class="news-info-box">
-                <strong>Info:</strong> Aktivitäten werden automatisch nach 7 Tagen ausgeblendet. Sie können einzelne Aktivitäten über das ✕ manuell ausblenden.
+            <div class="activities-info-box">
+                <strong>Info:</strong> Aktivitäten werden automatisch nach 7 Tagen ausgeblendet.
             </div>
         <?php endif; ?>
     </div>
@@ -277,7 +280,7 @@ function hideActivity(activityId) {
         activityItem.style.animation = 'fadeOut 0.3s ease-out';
         setTimeout(() => {
             activityItem.remove();
-            // Versteckte Aktivitäten im LocalStorage speichern
+            // Versteckte Aktivitäten im SessionStorage speichern
             let hiddenActivities = JSON.parse(sessionStorage.getItem('hiddenActivities') || '[]');
             hiddenActivities.push(activityId);
             sessionStorage.setItem('hiddenActivities', JSON.stringify(hiddenActivities));
@@ -298,11 +301,69 @@ document.addEventListener('DOMContentLoaded', function() {
 </script>
 
 <style>
-/* Sunset Theme Styles - Blau/Grau Töne */
+/* Sunset Theme Styles - Dunklere Blau/Grau Töne */
 .news-container {
     max-width: 1200px;
     margin: 0 auto;
     padding: 20px;
+}
+
+/* Dashboard Statistiken - IMMER OBEN */
+.dashboard-stats {
+    margin-bottom: 40px;
+    background-color: #1a2332;
+    padding: 25px;
+    border-radius: 8px;
+    border: 1px solid #2d3f55;
+}
+
+.dashboard-stats h3 {
+    color: #f4a460;
+    font-size: 22px;
+    margin: 0 0 20px 0;
+}
+
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 20px;
+}
+
+.stat-box {
+    background-color: #243447;
+    padding: 20px;
+    border-radius: 6px;
+    border: 1px solid #35495e;
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    transition: transform 0.2s ease;
+}
+
+.stat-box:hover {
+    transform: translateY(-2px);
+    background-color: #2a3b50;
+}
+
+.stat-icon {
+    font-size: 32px;
+    opacity: 0.8;
+}
+
+.stat-content {
+    flex: 1;
+}
+
+.stat-number {
+    font-size: 28px;
+    font-weight: bold;
+    color: #f4a460;
+}
+
+.stat-label {
+    font-size: 14px;
+    color: #8fb1d9;
+    margin-top: 4px;
 }
 
 /* Admin News Section */
@@ -318,373 +379,189 @@ document.addEventListener('DOMContentLoaded', function() {
 }
 
 .admin-news-section h3 {
-    color: #e0e0e0;
-    font-size: 20px;
+    color: #f4a460;
+    font-size: 22px;
     margin: 0;
 }
 
 .mark-all-read-btn {
-    background: linear-gradient(135deg, #063b52 0%, #002b45 100%);
+    background-color: #3b7ea8;
     color: white;
     border: none;
     padding: 8px 16px;
-    border-radius: 20px;
-    font-size: 14px;
+    border-radius: 5px;
     cursor: pointer;
-    transition: all 0.3s ease;
+    font-size: 14px;
+    transition: background-color 0.3s ease;
 }
 
 .mark-all-read-btn:hover {
-    background: linear-gradient(135deg, #002b45 0%, #063b52 100%);
-    transform: translateY(-2px);
-    box-shadow: 0 5px 15px rgba(0, 43, 69, 0.3);
+    background-color: #4a95c9;
 }
 
+/* News Items - Dunkelblaue Kästen mit weißer Schrift */
 .admin-news-item {
-    background: linear-gradient(135deg, rgba(6, 59, 82, 0.1) 0%, rgba(0, 43, 69, 0.1) 100%);
-    border: 1px solid rgba(6, 59, 82, 0.3);
-    border-radius: 15px;
+    background-color: #1e3a5f; /* Dunkelblau */
+    border: 1px solid #2a4f7a;
+    border-radius: 8px;
     padding: 20px;
     margin-bottom: 15px;
     position: relative;
-    transition: all 0.3s ease;
+    animation: slideIn 0.3s ease-out;
 }
 
-.admin-news-item.important {
-    background: linear-gradient(135deg, rgba(255, 153, 0, 0.15) 0%, rgba(255, 170, 51, 0.15) 100%);
-    border: 2px solid rgba(255, 153, 0, 0.4);
-    box-shadow: 0 0 20px rgba(255, 153, 0, 0.2);
+.admin-news-item.news-important {
+    background-color: #2d1f4f; /* Dunkles Violett-Blau für wichtige Nachrichten */
+    border-color: #4a3578;
 }
 
-.news-header-row {
+.admin-news-item .news-header {
     display: flex;
     justify-content: space-between;
     align-items: start;
-    margin-bottom: 10px;
+    margin-bottom: 12px;
 }
 
 .admin-news-item h4 {
-    color: #ffffff;
     margin: 0;
+    color: #ffffff; /* Weiße Überschrift */
     font-size: 18px;
-    font-weight: 600;
 }
 
-.close-btn {
-    background: rgba(255, 255, 255, 0.1);
-    border: 1px solid rgba(255, 255, 255, 0.2);
+.news-close-btn {
+    background: none;
+    border: none;
     color: #ffffff;
-    font-size: 18px;
-    line-height: 1;
+    font-size: 20px;
     cursor: pointer;
     padding: 0;
-    width: 32px;
-    height: 32px;
+    width: 24px;
+    height: 24px;
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 50%;
-    transition: all 0.2s ease;
+    border-radius: 4px;
+    transition: background-color 0.2s ease;
 }
 
-.close-btn:hover {
-    background: rgba(255, 107, 107, 0.8);
-    border-color: rgba(255, 107, 107, 0.9);
-    color: #ffffff;
-    transform: scale(1.1);
+.news-close-btn:hover {
+    background-color: rgba(255, 255, 255, 0.1);
 }
 
-.news-content {
-    color: #e0e0e0;
-    margin-bottom: 10px;
-    line-height: 1.7;
-    font-size: 15px;
+.news-body {
+    color: #ffffff; /* Weißer Text */
 }
 
-.news-meta {
+.news-body p {
+    margin: 0 0 15px 0;
+    line-height: 1.6;
+}
+
+.news-footer {
     display: flex;
     justify-content: space-between;
-    color: #999999;
     font-size: 13px;
+    color: #b8d4e8; /* Hellblaue Meta-Informationen */
 }
 
-/* Dashboard Header */
-.news-header {
-    margin-bottom: 40px;
-}
-
-.news-header h2 {
-    background: linear-gradient(135deg, #063b52 0%, #002b45 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-    font-size: 32px;
-    font-weight: 700;
-    margin-bottom: 25px;
-}
-
-.stats-row {
-    display: flex;
-    gap: 20px;
-    background: linear-gradient(135deg, rgba(6, 59, 82, 0.1) 0%, rgba(0, 43, 69, 0.1) 100%);
-    border: 1px solid rgba(6, 59, 82, 0.2);
-    border-radius: 15px;
+/* Aktivitäten Section */
+.activities-section {
+    background-color: #1a2332;
     padding: 25px;
-    margin-bottom: 20px;
+    border-radius: 8px;
+    border: 1px solid #2d3f55;
 }
 
-.stat-item {
+.activities-section h3 {
+    color: #f4a460;
+    font-size: 22px;
+    margin: 0 0 20px 0;
+}
+
+.no-activities {
+    color: #8fb1d9;
+    text-align: center;
+    padding: 20px;
+}
+
+.activity-item {
+    background-color: #243447;
+    border: 1px solid #35495e;
+    border-radius: 6px;
+    padding: 15px;
+    margin-bottom: 12px;
     display: flex;
-    flex-direction: column;
-    align-items: center;
+    align-items: start;
+    gap: 12px;
+    position: relative;
+}
+
+.activity-icon {
+    font-size: 24px;
+    opacity: 0.8;
+}
+
+.activity-content {
     flex: 1;
 }
 
-.stat-number {
-    font-size: 36px;
-    font-weight: 700;
-    background: linear-gradient(135deg, #ff9900 0%, #ffaa33 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-}
-
-.stat-label {
-    color: #b3b3b3;
-    font-size: 14px;
-    margin-top: 5px;
-}
-
-/* Progress Bar */
-.progress-container {
-    background: rgba(153, 153, 153, 0.2);
-    border-radius: 10px;
-    height: 10px;
-    overflow: hidden;
-}
-
-.progress-bar {
-    height: 100%;
-    background: linear-gradient(90deg, #ff9900 0%, #ffaa33 100%);
-    transition: width 0.5s ease;
-}
-
-/* News List */
-.news-list {
-    margin-top: 40px;
-}
-
-.news-list h3 {
+.activity-message {
     color: #e0e0e0;
-    font-size: 20px;
-    margin-bottom: 20px;
+    margin: 0 0 5px 0;
 }
 
-.news-item {
-    background: linear-gradient(135deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.05) 100%);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    border-radius: 15px;
-    padding: 25px;
-    display: flex;
-    align-items: flex-start;
-    gap: 20px;
-    transition: all 0.3s ease;
-    position: relative;
-    overflow: hidden;
+.activity-extra {
+    color: #8fb1d9;
+    font-size: 14px;
+    margin: 0 0 5px 0;
 }
 
-.news-item::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 3px;
-    background: linear-gradient(90deg, #063b52 0%, #002b45 100%);
-    transform: scaleX(0);
-    transform-origin: left;
-    transition: transform 0.3s ease;
-}
-
-.news-item:hover {
-    background: linear-gradient(135deg, rgba(6, 59, 82, 0.2) 0%, rgba(0, 43, 69, 0.15) 100%);
-    transform: translateY(-2px);
-    box-shadow: 0 10px 30px rgba(0, 43, 69, 0.2);
-}
-
-.news-item:hover::before {
-    transform: scaleX(1);
+.activity-date {
+    color: #6b8aad;
+    font-size: 13px;
+    margin: 0;
 }
 
 .activity-close-btn {
     position: absolute;
-    top: 15px;
-    right: 15px;
-    background: rgba(255, 255, 255, 0.1);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    color: #999999;
+    top: 10px;
+    right: 10px;
+    background: none;
+    border: none;
+    color: #8fb1d9;
     font-size: 16px;
-    line-height: 1;
     cursor: pointer;
     padding: 0;
-    width: 28px;
-    height: 28px;
+    width: 20px;
+    height: 20px;
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 50%;
-    transition: all 0.2s ease;
-    opacity: 0.7;
+    border-radius: 4px;
+    transition: background-color 0.2s ease;
 }
 
 .activity-close-btn:hover {
-    background: rgba(255, 107, 107, 0.8);
-    border-color: rgba(255, 107, 107, 0.9);
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+.activities-info-box {
+    background-color: #1e3a5f;
     color: #ffffff;
-    opacity: 1;
-    transform: scale(1.1);
-}
-
-.news-badge {
-    padding: 8px 16px;
-    border-radius: 25px;
-    font-size: 14px;
-    font-weight: 600;
-    white-space: nowrap;
-    flex-shrink: 0;
-}
-
-.badge-bewertung {
-    background: linear-gradient(135deg, #063b52 0%, #002b45 100%);
-    color: white;
-    box-shadow: 0 4px 15px rgba(6, 59, 82, 0.3);
-}
-
-.badge-zuweisung {
-    background: linear-gradient(135deg, #ff9900 0%, #ff7722 100%);
-    color: white;
-    box-shadow: 0 4px 15px rgba(255, 153, 0, 0.3);
-}
-
-.news-content {
-    flex: 1;
-    padding-right: 40px; /* Platz für X-Button */
-}
-
-.news-message {
-    color: #ffffff;
-    font-size: 16px;
-    margin-bottom: 8px;
-    font-weight: 500;
-    line-height: 1.5;
-}
-
-.news-extra {
-    color: #b3b3b3;
-    font-size: 14px;
-    margin-bottom: 8px;
-    font-weight: 600;
-}
-
-.news-date {
-    color: #999999;
+    padding: 12px;
+    border-radius: 5px;
+    margin-top: 15px;
     font-size: 13px;
 }
 
-.news-info-box {
-    background: rgba(255, 153, 0, 0.1);
-    border: 1px solid rgba(255, 153, 0, 0.3);
-    border-radius: 10px;
-    padding: 15px;
-    margin-top: 20px;
-    color: #ffd6cc;
-    font-size: 14px;
-    line-height: 1.6;
-}
-
-@keyframes pulse {
-    0% {
-        box-shadow: 0 0 0 0 rgba(255, 153, 0, 0.7);
-    }
-    70% {
-        box-shadow: 0 0 0 10px rgba(255, 153, 0, 0);
-    }
-    100% {
-        box-shadow: 0 0 0 0 rgba(255, 153, 0, 0);
-    }
-}
-
+/* Animationen */
 @keyframes fadeOut {
-    from {
-        opacity: 1;
-        transform: translateX(0);
-    }
-    to {
-        opacity: 0;
-        transform: translateX(-20px);
-    }
+    from { opacity: 1; transform: translateX(0); }
+    to { opacity: 0; transform: translateX(20px); }
 }
 
-.empty-state {
-    text-align: center;
-    padding: 80px 20px;
-    background: linear-gradient(135deg, rgba(153, 153, 153, 0.05) 0%, rgba(119, 119, 119, 0.05) 100%);
-    border: 2px dashed rgba(153, 153, 153, 0.3);
-    border-radius: 15px;
-}
-
-.empty-icon {
-    font-size: 48px;
-    margin-bottom: 20px;
-}
-
-.empty-state p {
-    color: #b3b3b3;
-    font-size: 16px;
-    margin-bottom: 10px;
-}
-
-.empty-state p:first-of-type {
-    color: #e0e0e0;
-    font-size: 18px;
-    font-weight: 500;
-}
-
-@media (max-width: 768px) {
-    .stats-row {
-        flex-wrap: wrap;
-        gap: 15px;
-    }
-    
-    .stat-item {
-        flex: 1 1 45%;
-    }
-    
-    .news-item {
-        flex-direction: column;
-        padding: 20px;
-    }
-    
-    .news-badge {
-        align-self: flex-start;
-    }
-    
-    .news-header h2 {
-        font-size: 24px;
-    }
-    
-    .stat-number {
-        font-size: 28px;
-    }
-    
-    .admin-news-header {
-        flex-direction: column;
-        gap: 15px;
-        align-items: flex-start;
-    }
-    
-    .mark-all-read-btn {
-        width: 100%;
-    }
+@keyframes slideIn {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
 }
 </style>
