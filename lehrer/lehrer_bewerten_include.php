@@ -2,6 +2,7 @@
 // Diese Datei wird von dashboard.php eingebunden
 // Wichtige Variablen aus dashboard.php verfügbar machen
 $school_id = $_SESSION['school_id'] ?? null;
+// $teacher_id kommt bereits von dashboard.php - NICHT überschreiben!
 
 // Flash-Messages verarbeiten
 $flash_message = null;
@@ -87,10 +88,12 @@ if (isset($_GET['rate']) && isset($_GET['group'])) {
 
 // Filter und Sortierung
 $status_filter = $_GET['status'] ?? 'all';
-$sort_by = $_GET['sort'] ?? 'name';
+$sort_by = $_GET['sort'] ?? 'name_asc';
 
 $order_clause = "ORDER BY s.last_name, s.first_name";
-if ($sort_by === 'status') {
+if ($sort_by === 'name_desc') {
+    $order_clause = "ORDER BY s.last_name DESC, s.first_name DESC";
+} elseif ($sort_by === 'status') {
     $order_clause = "ORDER BY r.id IS NULL, s.last_name, s.first_name";
 } elseif ($sort_by === 'date') {
     $order_clause = "ORDER BY r.rating_date DESC, s.last_name, s.first_name";
@@ -379,10 +382,8 @@ if (!$last_template_id) {
 
 /* Rating Modal Styles */
 .rating-modal {
-    /* WICHTIG: position absolute statt fixed, damit der Header beim Scrollen verschwindet */
-    position: absolute;
-    top: 0;
-    left: 0;
+    /* Relative position damit fixed elements innerhalb funktionieren */
+    position: relative;
     width: 100%;
     min-height: 100vh;
     background: linear-gradient(to bottom, #999999 0%, #ff9900 100%);
@@ -478,17 +479,23 @@ if (!$last_template_id) {
 
 .average-display {
     position: fixed;
-    bottom: 20px;
+    bottom: 80px;  /* Tiefer positioniert */
     right: 20px;
     background: rgba(67, 83, 106, 0.95);
     color: white;
     padding: 15px 20px;
     border-radius: 12px;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
-    z-index: 100;
+    z-index: 9999;  /* Sehr hoher z-index */
     min-width: 160px;
     backdrop-filter: blur(10px);
     transition: all 0.3s ease;
+    /* IMMER SICHTBAR */
+}
+
+.average-display:hover {
+    transform: scale(1.05);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
 }
 
 .average-display:hover {
@@ -811,15 +818,15 @@ if (!$last_template_id) {
 }
 
 .strength-stats {
-    position: fixed;
-    bottom: 20px;
-    right: 20px;
+    position: fixed !important;
+    bottom: 160px !important;  /* Höher als Durchschnitts-Box */
+    right: 20px !important;
     background: rgba(67, 83, 106, 0.95);
     color: white;
     padding: 15px 20px;
     border-radius: 12px;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
-    z-index: 100;
+    z-index: 9999 !important;
     min-width: 180px;
     backdrop-filter: blur(10px);
     transition: all 0.3s ease;
@@ -865,6 +872,25 @@ if (!$last_template_id) {
     margin-bottom: 10px;
 }
 
+/* Durchschnitts-Box immer sichtbar */
+@media (min-width: 769px) {
+    .average-display {
+        position: fixed !important;
+        bottom: 80px !important;
+        right: 20px !important;
+        left: auto !important;
+        z-index: 9999 !important;
+    }
+    
+    .strength-stats {
+        position: fixed !important;
+        bottom: 160px !important;  /* Höher positioniert, damit beide Boxen nicht überlappen */
+        right: 20px !important;
+        left: auto !important;
+        z-index: 9999 !important;
+    }
+}
+
 /* Mobile Responsive */
 @media (max-width: 768px) {
     .rating-header {
@@ -896,12 +922,22 @@ if (!$last_template_id) {
         justify-content: center;
     }
 
-    .average-display,
+    .average-display {
+        position: fixed !important;
+        bottom: 10px !important;
+        right: 10px !important;
+        left: 10px !important;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        min-width: auto;
+    }
+    
     .strength-stats {
-        position: fixed;
-        bottom: 10px;
-        right: 10px;
-        left: 10px;
+        position: fixed !important;
+        bottom: 80px !important;  /* Höher positioniert auf Mobile */
+        right: 10px !important;
+        left: 10px !important;
         display: flex;
         justify-content: space-between;
         align-items: center;
@@ -950,11 +986,10 @@ if (!$last_template_id) {
                 <option value="unrated" <?= $status_filter === 'unrated' ? 'selected' : '' ?>>Nicht bewertet</option>
             </select>
             
-            <label style="font-weight: 600; color: #002b45;">Namen sortieren:</label>
+            <label style="font-weight: 600; color: #002b45;">Filter:</label>
             <select class="select-control" onchange="changeSort(this.value)">
-                <option value="name" <?= $sort_by === 'name' ? 'selected' : '' ?>>A-Z</option>
-                <option value="status" <?= $sort_by === 'status' ? 'selected' : '' ?>>Nach Status</option>
-                <option value="date" <?= $sort_by === 'date' ? 'selected' : '' ?>>Nach Datum</option>
+                <option value="name_asc" <?= $sort_by === 'name_asc' ? 'selected' : '' ?>>A-Z</option>
+                <option value="name_desc" <?= $sort_by === 'name_desc' ? 'selected' : '' ?>>Z-A</option>
             </select>
         </div>
     </div>
@@ -1110,11 +1145,13 @@ if (!$last_template_id) {
                     <div class="rating-tabs">
                         <button class="tab-button <?= $active_tab === 'rating' ? 'active' : '' ?>" 
                                 onclick="switchTab('rating')"
+                                id="ratingTabButton"
                                 <?= !$current_rating ? 'title="Bitte speichern Sie zuerst die Bewertung"' : '' ?>>
                             Bewertung
                         </button>
                         <button class="tab-button <?= $active_tab === 'strengths' ? 'active' : '' ?>" 
                                 onclick="switchTab('strengths')"
+                                id="strengthsTabButton"
                                 <?= !$current_rating ? 'disabled title="Bitte speichern Sie zuerst die Bewertung"' : '' ?>>
                             Stärken
                         </button>
@@ -1148,13 +1185,12 @@ if (!$last_template_id) {
                 </div>
                 
                 <form method="POST" class="rating-form" id="ratingForm">
-                    <input type="hidden" name="form_action" value="save_rating">
                     <input type="hidden" name="student_id" value="<?= $student_id ?>">
                     <input type="hidden" name="group_id" value="<?= $group_id ?>">
                     <input type="hidden" name="template_id" value="<?= $template_id ?>">
                     <input type="hidden" name="csrf_token" value="<?= $_SESSION['csrf_token'] ?>">
                     
-                    <div class="final-grade-section">
+                    <div class="final-grade-section" id="finalGradeSection">
                         <div class="final-grade-row">
                             <label class="final-grade-label">Endnote:</label>
                             <input type="number" 
@@ -1207,10 +1243,11 @@ if (!$last_template_id) {
                     <?php endforeach; ?>
                     
                     <div class="form-actions">
-                        <button type="submit" name="save_and_continue" class="btn btn-save">
-                            Speichern
+                        <button type="submit" name="save_with_average" value="1" class="btn btn-save" 
+                                onclick="takeOverAverage(); localStorage.setItem('goToStrengthsTab', 'true');">
+                            Speichern und Durchschnitt übernehmen
                         </button>
-                        <button type="submit" name="save_and_close" class="btn btn-save">
+                        <button type="submit" name="save_and_close" value="1" class="btn btn-save">
                             Speichern und schließen
                         </button>
                         <button type="button" class="btn btn-secondary" onclick="window.location.href='?page=bewerten'">
@@ -1231,7 +1268,6 @@ if (!$last_template_id) {
                 
                 <?php if (!empty($strength_categories)): ?>
                     <form method="POST" class="strengths-form" id="strengthsForm">
-                        <input type="hidden" name="form_action" value="save_strengths">
                         <input type="hidden" name="student_id" value="<?= $student_id ?>">
                         <input type="hidden" name="group_id" value="<?= $group_id ?>">
                         <input type="hidden" name="csrf_token" value="<?= $_SESSION['csrf_token'] ?>">
@@ -1269,7 +1305,8 @@ if (!$last_template_id) {
                             <button type="submit" name="save_and_continue" class="btn btn-save">
                                 Stärken speichern
                             </button>
-                            <button type="submit" name="save_and_close" class="btn btn-save">
+                            <button type="submit" name="save_and_close" class="btn btn-save" 
+                                    onclick="localStorage.setItem('goToOverview', 'true');">
                                 Speichern und schließen
                             </button>
                             <button type="button" class="btn btn-secondary" onclick="window.location.href='?page=bewerten'">
@@ -1319,6 +1356,7 @@ function saveTemplateSelection(studentId, groupId) {
 }
 
 function switchTab(tab) {
+    // Direkt zum Tab wechseln ohne Reload wenn möglich
     const searchParams = new URLSearchParams(window.location.search);
     searchParams.set('tab', tab);
     window.location.href = window.location.pathname + '?' + searchParams.toString();
@@ -1405,8 +1443,27 @@ function updateStrengthCount() {
     }, 200);
 }
 
+// Box ist immer sichtbar - keine Visibility-Checks mehr nötig
+
 // Event Listeners
 document.addEventListener('DOMContentLoaded', function() {
+    // Prüfen ob zur Übersicht gewechselt werden soll
+    if (localStorage.getItem('goToOverview') === 'true') {
+        localStorage.removeItem('goToOverview');
+        window.location.href = '?page=bewerten';
+        return;
+    }
+    
+    // Prüfen ob zum Stärken-Tab gewechselt werden soll
+    if (localStorage.getItem('goToStrengthsTab') === 'true') {
+        localStorage.removeItem('goToStrengthsTab');
+        // Nur wechseln wenn wir im Rating-Tab sind
+        <?php if ($rating_mode && $active_tab === 'rating'): ?>
+            // Die bereits existierende switchTab Funktion verwenden
+            switchTab('strengths');
+        <?php endif; ?>
+    }
+    
     // Flash Messages automatisch ausblenden
     setTimeout(() => {
         document.querySelectorAll('.flash-message').forEach(msg => {
