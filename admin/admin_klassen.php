@@ -250,11 +250,59 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $classId = (int)($_POST['class_id'] ?? 0);
                 if ($classId) {
                     $db = getDB();
-                    $stmt = $db->prepare("UPDATE classes SET is_active = 0 WHERE id = ? AND school_id = ?");
-                    if ($stmt->execute([$classId, $user['school_id']])) {
+                    $db->beginTransaction();
+                    
+                    try {
+                        // Zuerst zählen, wie viele Schüler betroffen sind
+                        $stmt = $db->prepare("
+                            SELECT COUNT(DISTINCT s.id) as student_count,
+                                   COUNT(DISTINCT gs.student_id) as students_in_groups
+                            FROM students s
+                            LEFT JOIN group_students gs ON s.id = gs.student_id
+                            WHERE s.class_id = ? AND s.school_id = ? AND s.is_active = 1
+                        ");
+                        $stmt->execute([$classId, $user['school_id']]);
+                        $counts = $stmt->fetch();
+                        
+                        // Alle Schüler der Klasse aus allen Gruppen entfernen
+                        $stmt = $db->prepare("
+                            DELETE gs FROM group_students gs
+                            JOIN students s ON gs.student_id = s.id
+                            WHERE s.class_id = ? AND s.school_id = ?
+                        ");
+                        $stmt->execute([$classId, $user['school_id']]);
+                        $removedFromGroups = $stmt->rowCount();
+                        
+                        // Prüfen ob Gruppen dieser Klasse jetzt leer sind und deaktivieren
+                        $stmt = $db->prepare("
+                            UPDATE groups g
+                            SET g.is_active = 0, g.updated_at = NOW()
+                            WHERE g.class_id = ? 
+                            AND g.school_id = ?
+                            AND NOT EXISTS (
+                                SELECT 1 FROM group_students gs 
+                                WHERE gs.group_id = g.id
+                            )
+                        ");
+                        $stmt->execute([$classId, $user['school_id']]);
+                        $emptyGroupsDeactivated = $stmt->rowCount();
+                        
+                        // Soft delete der Klasse
+                        $stmt = $db->prepare("UPDATE classes SET is_active = 0 WHERE id = ? AND school_id = ?");
+                        $stmt->execute([$classId, $user['school_id']]);
+                        
+                        $db->commit();
+                        
                         $success = 'Klasse erfolgreich gelöscht.';
-                    } else {
-                        $errors[] = 'Fehler beim Löschen der Klasse.';
+                        if ($removedFromGroups > 0) {
+                            $success .= " $removedFromGroups Schüler wurden aus ihren Gruppen entfernt.";
+                        }
+                        if ($emptyGroupsDeactivated > 0) {
+                            $success .= " $emptyGroupsDeactivated leere Gruppen wurden deaktiviert.";
+                        }
+                    } catch (Exception $e) {
+                        $db->rollBack();
+                        $errors[] = 'Fehler beim Löschen der Klasse: ' . $e->getMessage();
                     }
                 }
                 break;
@@ -263,15 +311,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $studentId = (int)($_POST['student_id'] ?? 0);
                 if ($studentId) {
                     $db = getDB();
-                    $stmt = $db->prepare("
-                        UPDATE students 
-                        SET is_active = 0 
-                        WHERE id = ? AND school_id = ?
-                    ");
-                    if ($stmt->execute([$studentId, $user['school_id']])) {
+                    $db->beginTransaction();
+                    
+                    try {
+                        // Schüler aus allen Gruppen entfernen
+                        $stmt = $db->prepare("DELETE FROM group_students WHERE student_id = ?");
+                        $stmt->execute([$studentId]);
+                        $removedFromGroups = $stmt->rowCount();
+                        
+                        // Soft delete des Schülers
+                        $stmt = $db->prepare("
+                            UPDATE students 
+                            SET is_active = 0 
+                            WHERE id = ? AND school_id = ?
+                        ");
+                        $stmt->execute([$studentId, $user['school_id']]);
+                        
+                        $db->commit();
+                        
                         $success = 'Schüler erfolgreich entfernt.';
-                    } else {
-                        $errors[] = 'Fehler beim Entfernen des Schülers.';
+                        if ($removedFromGroups > 0) {
+                            $success .= ' Der Schüler wurde aus allen Gruppen entfernt.';
+                        }
+                    } catch (Exception $e) {
+                        $db->rollBack();
+                        $errors[] = 'Fehler beim Entfernen des Schülers: ' . $e->getMessage();
                     }
                 }
                 break;
@@ -283,9 +347,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $db = getDB();
 $stmt = $db->prepare("
     SELECT c.*, 
-           COUNT(s.id) as student_count
+           COUNT(DISTINCT s.id) as student_count,
+           COUNT(DISTINCT gs.student_id) as students_in_groups
     FROM classes c 
     LEFT JOIN students s ON c.id = s.class_id AND s.is_active = 1
+    LEFT JOIN group_students gs ON s.id = gs.student_id
     WHERE c.school_id = ? AND c.is_active = 1 
     GROUP BY c.id 
     ORDER BY c.name ASC
@@ -315,32 +381,36 @@ if (isset($_GET['ajax'])) {
             }
             exit;
             
-case 'get_students':
-    $classId = (int)($_GET['class_id'] ?? 0);
-    if ($classId) {
-        $stmt = $db->prepare("
-            SELECT * FROM students 
-            WHERE class_id = ? AND school_id = ? AND is_active = 1 
-            ORDER BY last_name ASC, first_name ASC
-        ");
-        $stmt->execute([$classId, $user['school_id']]);
-        $students = $stmt->fetchAll();
-        
-        // Debug: Sortierung in PHP sicherstellen
-        usort($students, function($a, $b) {
-            $result = strcasecmp($a['last_name'], $b['last_name']);
-            if ($result === 0) {
-                return strcasecmp($a['first_name'], $b['first_name']);
+        case 'get_students':
+            $classId = (int)($_GET['class_id'] ?? 0);
+            if ($classId) {
+                $stmt = $db->prepare("
+                    SELECT s.*, 
+                           CASE WHEN gs.student_id IS NOT NULL THEN 1 ELSE 0 END as in_group,
+                           g.name as group_name
+                    FROM students s
+                    LEFT JOIN group_students gs ON s.id = gs.student_id
+                    LEFT JOIN groups g ON gs.group_id = g.id AND g.is_active = 1
+                    WHERE s.class_id = ? AND s.school_id = ? AND s.is_active = 1 
+                    ORDER BY s.last_name ASC, s.first_name ASC
+                ");
+                $stmt->execute([$classId, $user['school_id']]);
+                $students = $stmt->fetchAll();
+                
+                // Debug: Sortierung in PHP sicherstellen
+                usort($students, function($a, $b) {
+                    $result = strcasecmp($a['last_name'], $b['last_name']);
+                    if ($result === 0) {
+                        return strcasecmp($a['first_name'], $b['first_name']);
+                    }
+                    return $result;
+                });
+                
+                echo json_encode(['success' => true, 'students' => $students]);
+            } else {
+                echo json_encode(['success' => false, 'error' => 'Ungültige Klassen-ID']);
             }
-            return $result;
-        });
-        
-        echo json_encode(['success' => true, 'students' => $students]);
-    } else {
-        echo json_encode(['success' => false, 'error' => 'Ungültige Klassen-ID']);
-    }
-    exit;
-
+            exit;
     }
 }
 ?>
@@ -621,6 +691,10 @@ case 'get_students':
             margin-bottom: 0;
         }
 
+        .stat-item.warning {
+            color: #fbbf24;
+        }
+
         .class-actions {
             display: flex;
             gap: 0.5rem;
@@ -646,6 +720,21 @@ case 'get_students':
             background: rgba(0, 0, 0, 0.3);
             border-radius: 0.5rem;
             margin-bottom: 0.5rem;
+        }
+
+        .student-name {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .group-indicator {
+            font-size: 0.75rem;
+            padding: 0.25rem 0.5rem;
+            background: rgba(59, 130, 246, 0.2);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            border-radius: 0.25rem;
+            color: #93c5fd;
         }
 
         /* Modal Styles mit höherem z-index */
@@ -837,7 +926,7 @@ case 'get_students':
 
         <?php if (!empty($errors)): ?>
             <div class="error-list">
-                <h4⚠️ Fehler:</h4>
+                <h4>⚠️ Fehler:</h4>
                 <ul>
                     <?php foreach ($errors as $error): ?>
                         <li><?php echo escape($error); ?></li>
@@ -979,6 +1068,12 @@ case 'get_students':
                                 <span>👥 Schülerzahl:</span>
                                 <span><?php echo $class['student_count']; ?> / <?php echo $school['max_students_per_class']; ?></span>
                             </div>
+                            <?php if ($class['students_in_groups'] > 0): ?>
+                                <div class="stat-item warning">
+                                    <span>👥 In Gruppen:</span>
+                                    <span><?php echo $class['students_in_groups']; ?> Schüler</span>
+                                </div>
+                            <?php endif; ?>
                             <div class="stat-item">
                                 <span>📅 Erstellt:</span>
                                 <span><?php echo formatDate($class['created_at']); ?></span>
@@ -1106,42 +1201,40 @@ case 'get_students':
         </div>
     </div>
 
-<!-- Modal: Schüler bearbeiten -->
-<div id="editStudentModal" class="modal">
-    <div class="modal-content" style="max-width: 500px;">
-        <div class="modal-header">
-            <h3 class="modal-title">Schüler bearbeiten</h3>
-            <span class="close" onclick="closeModal('editStudentModal')">&times;</span>
+    <!-- Modal: Schüler bearbeiten -->
+    <div id="editStudentModal" class="modal">
+        <div class="modal-content" style="max-width: 500px;">
+            <div class="modal-header">
+                <h3 class="modal-title">Schüler bearbeiten</h3>
+                <span class="close" onclick="closeModal('editStudentModal')">&times;</span>
+            </div>
+            <form id="editStudentForm" onsubmit="saveStudent(event)">
+                <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
+                <input type="hidden" name="action" value="update_student">
+                <input type="hidden" id="edit_student_id" name="student_id" value="">
+                <input type="hidden" id="current_class_id" value="">
+                
+                <div class="form-group">
+                    <label for="edit_first_name">Vorname *</label>
+                    <input type="text" id="edit_first_name" name="edit_first_name" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="edit_last_name">Nachname *</label>
+                    <input type="text" id="edit_last_name" name="edit_last_name" required>
+                </div>
+                
+                <div class="form-actions">
+                    <button type="button" onclick="closeModal('editStudentModal')" class="btn btn-secondary">
+                        Abbrechen
+                    </button>
+                    <button type="submit" class="btn btn-success">
+                        Speichern
+                    </button>
+                </div>
+            </form>
         </div>
-        <form id="editStudentForm" onsubmit="saveStudent(event)">
-            <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
-            <input type="hidden" name="action" value="update_student">
-            <input type="hidden" id="edit_student_id" name="student_id" value="">
-            <input type="hidden" id="current_class_id" value="">
-            
-            <div class="form-group">
-                <label for="edit_first_name">Vorname *</label>
-                <input type="text" id="edit_first_name" name="edit_first_name" required>
-            </div>
-            
-            <div class="form-group">
-                <label for="edit_last_name">Nachname *</label>
-                <input type="text" id="edit_last_name" name="edit_last_name" required>
-            </div>
-            
-            <div class="form-actions">
-                <button type="button" onclick="closeModal('editStudentModal')" class="btn btn-secondary">
-                    Abbrechen
-                </button>
-                <button type="submit" class="btn btn-success">
-                    Speichern
-                </button>
-            </div>
-        </form>
     </div>
-</div>
-
-
 
     <script>
         function updateFileName(input) {
@@ -1196,125 +1289,108 @@ case 'get_students':
                 });
         }
 
-
-function loadStudentsList(classId) {
-    fetch('?ajax=get_students&class_id=' + classId)
-        .then(response => {
-            if (!response.ok) {
-                throw new Error('Network response was not ok');
-            }
-            return response.json();
-        })
-        .then(data => {
-            if (data.success) {
-                const studentsList = document.getElementById('studentsList');
-                let html = '';
-                
-                if (data.students.length === 0) {
-                    html = '<div style="text-align: center; padding: 2rem; opacity: 0.7;">Noch keine Schüler in dieser Klasse</div>';
-                } else {
-                    // HIER IST DIE SORTIERUNG!
-                    data.students.sort((a, b) => {
-                        // Nach Nachname sortieren
-                        let compare = a.last_name.localeCompare(b.last_name, 'de');
-                        // Bei gleichem Nachnamen nach Vorname sortieren
-                        if (compare === 0) {
-                            compare = a.first_name.localeCompare(b.first_name, 'de');
-                        }
-                        return compare;
-                    });
-                    
-                    data.students.forEach(student => {
-                        // Escape single quotes in student names to avoid JavaScript errors
-                        const firstName = (student.first_name || '').replace(/'/g, "\\'");
-                        const lastName = (student.last_name || '').replace(/'/g, "\\'");
+        function loadStudentsList(classId) {
+            fetch('?ajax=get_students&class_id=' + classId)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    if (data.success) {
+                        const studentsList = document.getElementById('studentsList');
+                        let html = '';
                         
-                        html += `
-                            <div class="student-item" style="margin-bottom: 0.5rem;">
-                                <span>${student.last_name || ''}, ${student.first_name || ''}</span>
-                                <div style="display: flex; gap: 0.5rem;">
-                                    <button onclick="editStudent(${student.id}, '${firstName}', '${lastName}')" 
-                                            class="btn btn-secondary btn-sm">✏️</button>
-                                    <button onclick="deleteStudent(${student.id})" 
-                                            class="btn btn-danger btn-sm">🗑️</button>
-                                </div>
-                            </div>
-                        `;
-                    });
-                }
-                
-                studentsList.innerHTML = html;
-            } else {
-                console.error('Fehler:', data.error);
-                document.getElementById('studentsList').innerHTML = 
-                    '<div style="color: #ef4444;">Fehler beim Laden der Schülerliste: ' + (data.error || 'Unbekannter Fehler') + '</div>';
-            }
-        })
-        .catch(error => {
-            console.error('Fehler beim Laden der Schülerliste:', error);
-            document.getElementById('studentsList').innerHTML = 
-                '<div style="color: #ef4444;">Fehler beim Laden der Schülerliste: ' + error.message + '</div>';
-        });
-}
-
+                        if (data.students.length === 0) {
+                            html = '<div style="text-align: center; padding: 2rem; opacity: 0.7;">Noch keine Schüler in dieser Klasse</div>';
+                        } else {
+                            // Sortierung
+                            data.students.sort((a, b) => {
+                                let compare = a.last_name.localeCompare(b.last_name, 'de');
+                                if (compare === 0) {
+                                    compare = a.first_name.localeCompare(b.first_name, 'de');
+                                }
+                                return compare;
+                            });
+                            
+                            data.students.forEach(student => {
+                                const firstName = (student.first_name || '').replace(/'/g, "\\'");
+                                const lastName = (student.last_name || '').replace(/'/g, "\\'");
+                                
+                                html += `
+                                    <div class="student-item" style="margin-bottom: 0.5rem;">
+                                        <div class="student-name">
+                                            <span>${student.last_name || ''}, ${student.first_name || ''}</span>
+                                            ${student.in_group ? `<span class="group-indicator">Gruppe: ${student.group_name || 'Unbenannt'}</span>` : ''}
+                                        </div>
+                                        <div style="display: flex; gap: 0.5rem;">
+                                            <button onclick="editStudent(${student.id}, '${firstName}', '${lastName}')" 
+                                                    class="btn btn-secondary btn-sm">✏️</button>
+                                            <button onclick="deleteStudent(${student.id}, ${student.in_group})" 
+                                                    class="btn btn-danger btn-sm">🗑️</button>
+                                        </div>
+                                    </div>
+                                `;
+                            });
+                        }
+                        
+                        studentsList.innerHTML = html;
+                    } else {
+                        console.error('Fehler:', data.error);
+                        document.getElementById('studentsList').innerHTML = 
+                            '<div style="color: #ef4444;">Fehler beim Laden der Schülerliste: ' + (data.error || 'Unbekannter Fehler') + '</div>';
+                    }
+                })
+                .catch(error => {
+                    console.error('Fehler beim Laden der Schülerliste:', error);
+                    document.getElementById('studentsList').innerHTML = 
+                        '<div style="color: #ef4444;">Fehler beim Laden der Schülerliste: ' + error.message + '</div>';
+                });
+        }
 
         function editStudent(studentId, firstName, lastName) {
             document.getElementById('edit_student_id').value = studentId;
             document.getElementById('edit_first_name').value = firstName;
             document.getElementById('edit_last_name').value = lastName;
+            document.getElementById('current_class_id').value = document.getElementById('edit_class_id').value;
             document.getElementById('editStudentModal').style.display = 'block';
         }
 
-
-function editStudent(studentId, firstName, lastName) {
-    document.getElementById('edit_student_id').value = studentId;
-    document.getElementById('edit_first_name').value = firstName;
-    document.getElementById('edit_last_name').value = lastName;
-    // Aktuelle Klassen-ID speichern
-    document.getElementById('current_class_id').value = document.getElementById('edit_class_id').value;
-    document.getElementById('editStudentModal').style.display = 'block';
-}
-
-function saveStudent(event) {
-    event.preventDefault();
-    
-    const formData = new FormData(document.getElementById('editStudentForm'));
-    
-    fetch('', {
-        method: 'POST',
-        body: formData
-    })
-    .then(response => response.text())
-    .then(html => {
-        // Prüfen ob erfolgreich (suche nach Erfolgs-Nachricht im HTML)
-        if (html.includes('erfolgreich aktualisiert')) {
-            // Modal schließen
-            closeModal('editStudentModal');
+        function saveStudent(event) {
+            event.preventDefault();
             
-            // Schülerliste neu laden
-            const classId = document.getElementById('current_class_id').value;
-            if (classId) {
-                loadStudentsList(classId);
-            }
+            const formData = new FormData(document.getElementById('editStudentForm'));
             
-            // Erfolgsmeldung anzeigen (optional)
-            alert('Schüler erfolgreich aktualisiert');
-        } else {
-            alert('Fehler beim Speichern');
+            fetch('', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.text())
+            .then(html => {
+                if (html.includes('erfolgreich aktualisiert')) {
+                    closeModal('editStudentModal');
+                    const classId = document.getElementById('current_class_id').value;
+                    if (classId) {
+                        loadStudentsList(classId);
+                    }
+                    alert('Schüler erfolgreich aktualisiert');
+                } else {
+                    alert('Fehler beim Speichern');
+                }
+            })
+            .catch(error => {
+                alert('Ein Fehler ist aufgetreten: ' + error.message);
+                console.error(error);
+            });
         }
-    })
-    .catch(error => {
-        alert('Ein Fehler ist aufgetreten: ' + error.message);
-        console.error(error);
-    });
-}
 
         function closeModal(modalId) {
             document.getElementById(modalId).style.display = 'none';
         }
 
         function deleteClass(classId) {
-            if (confirm('Klasse wirklich löschen? Alle Schüler und Bewertungen gehen verloren!')) {
+            if (confirm('Klasse wirklich löschen? Alle Schüler werden aus ihren Gruppen entfernt und die Klasse wird gelöscht!')) {
                 const formData = new FormData();
                 formData.append('action', 'delete_class');
                 formData.append('class_id', classId);
@@ -1335,8 +1411,13 @@ function saveStudent(event) {
             }
         }
 
-        function deleteStudent(studentId) {
-            if (confirm('Schüler wirklich entfernen?')) {
+        function deleteStudent(studentId, inGroup) {
+            let confirmMessage = 'Schüler wirklich entfernen?';
+            if (inGroup) {
+                confirmMessage = 'Schüler wirklich entfernen? Der Schüler wird aus allen Gruppen entfernt!';
+            }
+            
+            if (confirm(confirmMessage)) {
                 const formData = new FormData();
                 formData.append('action', 'delete_student');
                 formData.append('student_id', studentId);

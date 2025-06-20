@@ -316,11 +316,19 @@ if ($page === 'gruppen' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST
                     throw new Exception('Gruppe nicht gefunden oder keine Berechtigung.');
                 }
                 
-                // Soft delete
+                $db->beginTransaction();
+                
+                // WICHTIG: Erst alle Schüler aus der Gruppe entfernen (zurück zum Pool)
+                $stmt = $db->prepare("DELETE FROM group_students WHERE group_id = ?");
+                $stmt->execute([$group_id]);
+                
+                // Dann Gruppe als inaktiv markieren (soft delete)
                 $stmt = $db->prepare("UPDATE groups SET is_active = 0, updated_at = NOW() WHERE id = ?");
                 $stmt->execute([$group_id]);
                 
-                $_SESSION['flash_message'] = "Gruppe '{$group['name']}' erfolgreich gelöscht.";
+                $db->commit();
+                
+                $_SESSION['flash_message'] = "Gruppe '{$group['name']}' erfolgreich gelöscht. Alle Schüler wurden zum Pool zurückgeführt.";
                 $_SESSION['flash_type'] = 'success';
                 break;
                 
