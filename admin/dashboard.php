@@ -388,7 +388,7 @@ if ($school['license_until']) {
     <div class="container">
         <?php if ($flashMessage): ?>
             <div class="flash-message flash-<?php echo $flashMessage['type']; ?>">
-                <?php echo escape($user['name'] ?? $user['email'] ?? 'Unbekannter Benutzer'); ?>
+                <?php echo escape($flashMessage['message']); ?>
             </div>
         <?php endif; ?>
 
@@ -489,7 +489,7 @@ if ($school['license_until']) {
                     Verwalten Sie Lehreraccounts, weisen Sie Klassen zu und organisieren Sie Berechtigungen.
                 </div>
                 <div class="module-status">
-                    <span class="status-badge status-coming-soon">In Entwicklung</span>
+                    <span class="status-badge status-active">Verfügbar</span>
                 </div>
             </a>
 
@@ -505,7 +505,7 @@ if ($school['license_until']) {
                     Definieren Sie Schulfächer, erstellen Sie Lehrpläne und ordnen Sie Fächer den Klassen zu.
                 </div>
                 <div class="module-status">
-                    <span class="status-badge status-coming-soon">Geplant</span>
+                    <span class="status-badge status-active">Verfügbar</span>
                 </div>
             </a>
 
@@ -538,6 +538,22 @@ if ($school['license_until']) {
                 </div>
                 <div class="module-status">
                     <span class="status-badge status-coming-soon">Geplant</span>
+                </div>
+            </a>
+
+            <a href="admin_data_management.php" class="module-card">
+                <div class="module-header">
+                    <div class="module-icon">💾</div>
+                    <div>
+                        <div class="module-title">Datenmanagement</div>
+                        <div class="module-subtitle">Export, Import & Bereinigung</div>
+                    </div>
+                </div>
+                <div class="module-description">
+                    Exportieren Sie Schuldaten, erstellen Sie Backups oder bereinigen Sie Daten für eine Neueinrichtung.
+                </div>
+                <div class="module-status">
+                    <span class="status-badge status-active">Verfügbar</span>
                 </div>
             </a>
 

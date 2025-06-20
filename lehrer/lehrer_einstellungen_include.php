@@ -16,7 +16,7 @@ if (!isset($teacher)) {
 }
 
 // Prüfen ob Passwort bereits geändert wurde
-$stmt = $db->prepare("SELECT first_login, password_set_by_admin, admin_password FROM users WHERE id = ?");
+$stmt = $db->prepare("SELECT first_login, password_set_by_admin, admin_password, updated_at FROM users WHERE id = ?");
 $stmt->execute([$teacher_id]);
 $user_data = $stmt->fetch();
 $password_changed = !($user_data['first_login'] ?? 1) || !($user_data['password_set_by_admin'] ?? 1);
@@ -222,10 +222,23 @@ if (isset($_SESSION['flash_message'])) {
     font-size: 0.9rem;
 }
 
-.password-display {
-    font-size: 1.5rem;
-    letter-spacing: 5px;
-    color: #FF6B6B;
+.password-changed-date {
+    font-size: 0.8rem;
+    color: #95A5A6;
+    margin-top: 10px;
+}
+
+.password-form-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.password-form-title {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #2D3436;
 }
 
 /* Responsive Design */
@@ -273,8 +286,8 @@ if (isset($_SESSION['flash_message'])) {
             <span class="password-status-icon"><?= $password_changed ? '✅' : '⚠️' ?></span>
             <div>
                 <?php if ($password_changed): ?>
-                    <strong>Passwort wurde geändert</strong><br>
-                    <span class="password-display">***</span>
+                    <strong>Eigenes Passwort gesetzt</strong><br>
+                    <span style="font-size: 0.9rem; opacity: 0.8;">Sie können Ihr Passwort jederzeit ändern</span>
                 <?php else: ?>
                     <strong>Standard-Passwort aktiv</strong><br>
                     <?php if (!empty($user_data['admin_password'])): ?>
@@ -286,53 +299,68 @@ if (isset($_SESSION['flash_message'])) {
             </div>
         </div>
 
-        <?php if (!$password_changed): ?>
-            <form method="POST" action="?page=einstellungen" id="passwordForm">
-                <input type="hidden" name="action" value="change_password">
-                
-                <div class="password-requirements">
-                    <h4>Passwort-Anforderungen:</h4>
-                    <ul class="requirement-list">
-                        <li>Mindestens 8 Zeichen lang</li>
-                        <li>Mindestens 1 Großbuchstabe (A-Z)</li>
-                        <li>Mindestens 1 Sonderzeichen (!@#$%^&*...)</li>
-                    </ul>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label" for="new_password">Neues Passwort</label>
-                    <input type="password" 
-                           class="form-input" 
-                           id="new_password" 
-                           name="new_password" 
-                           required
-                           minlength="8"
-                           placeholder="Ihr neues Passwort">
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label" for="confirm_password">Passwort bestätigen</label>
-                    <input type="password" 
-                           class="form-input" 
-                           id="confirm_password" 
-                           name="confirm_password" 
-                           required
-                           minlength="8"
-                           placeholder="Passwort wiederholen">
-                </div>
-
-                <button type="submit" class="btn-sunset">
-                    🔒 Passwort ändern
-                </button>
-            </form>
-        <?php else: ?>
-            <div class="info-box">
-                <p>
-                    <strong>Hinweis:</strong> Ihr Passwort wurde erfolgreich geändert. 
-                    Falls Sie es erneut ändern möchten, wenden Sie sich bitte an Ihren Schuladministrator.
-                </p>
+        <form method="POST" action="?page=einstellungen" id="passwordForm">
+            <input type="hidden" name="action" value="change_password">
+            
+            <div class="password-form-header">
+                <span class="password-form-title">
+                    <?= $password_changed ? '🔄 Passwort ändern' : '🔐 Neues Passwort setzen' ?>
+                </span>
             </div>
-        <?php endif; ?>
+            
+            <div class="password-requirements">
+                <h4>Passwort-Anforderungen:</h4>
+                <ul class="requirement-list">
+                    <li>Mindestens 8 Zeichen lang</li>
+                    <li>Mindestens 1 Großbuchstabe (A-Z)</li>
+                    <li>Mindestens 1 Sonderzeichen (!@#$%^&*...)</li>
+                </ul>
+            </div>
+
+            <?php if ($password_changed): ?>
+            <div class="form-group">
+                <label class="form-label" for="current_password">Aktuelles Passwort (optional)</label>
+                <input type="password" 
+                       class="form-input" 
+                       id="current_password" 
+                       name="current_password" 
+                       placeholder="Zur Sicherheit Ihr aktuelles Passwort">
+                <small style="color: #95A5A6;">Optional - erhöht die Sicherheit bei der Passwortänderung</small>
+            </div>
+            <?php endif; ?>
+
+            <div class="form-group">
+                <label class="form-label" for="new_password">Neues Passwort</label>
+                <input type="password" 
+                       class="form-input" 
+                       id="new_password" 
+                       name="new_password" 
+                       required
+                       minlength="8"
+                       placeholder="Ihr neues Passwort">
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="confirm_password">Passwort bestätigen</label>
+                <input type="password" 
+                       class="form-input" 
+                       id="confirm_password" 
+                       name="confirm_password" 
+                       required
+                       minlength="8"
+                       placeholder="Passwort wiederholen">
+            </div>
+
+            <button type="submit" class="btn-sunset">
+                🔒 Passwort <?= $password_changed ? 'ändern' : 'erstmalig setzen' ?>
+            </button>
+            
+            <?php if ($password_changed && !empty($user_data['updated_at'])): ?>
+            <div class="password-changed-date">
+                Letztes Update: <?= date('d.m.Y H:i', strtotime($user_data['updated_at'])) ?> Uhr
+            </div>
+            <?php endif; ?>
+        </form>
     </div>
 
     <div class="settings-section">
@@ -380,6 +408,7 @@ document.getElementById('passwordForm')?.addEventListener('submit', function(e) 
 // Live-Validierung während der Eingabe
 const passwordInput = document.getElementById('new_password');
 const confirmInput = document.getElementById('confirm_password');
+const currentInput = document.getElementById('current_password');
 
 if (passwordInput) {
     passwordInput.addEventListener('input', function() {
@@ -402,4 +431,15 @@ if (confirmInput) {
         this.style.borderColor = match ? '#7FE3C1' : '#FFE66D';
     });
 }
+
+// Passwort-Sichtbarkeit umschalten (optional)
+document.querySelectorAll('.form-input[type="password"]').forEach(input => {
+    input.addEventListener('focus', function() {
+        this.style.boxShadow = '0 0 0 3px rgba(255, 107, 107, 0.2)';
+    });
+    
+    input.addEventListener('blur', function() {
+        this.style.boxShadow = 'none';
+    });
+});
 </script>
