@@ -441,7 +441,7 @@ if ($school['license_until']) {
                     </div>
                 </div>
                 <div class="module-description">
-                    Erstellen und verwalten Sie Schulklassen, fügen Sie Schüler hinzu und organisieren Sie die Klassenstruktur.
+                    Erstellen und verwalten Sie Schulklassen. Hochladen von Schülerdaten.
                 </div>
                 <div class="module-status">
                     <span class="status-badge status-active">Verfügbar</span>
@@ -453,11 +453,11 @@ if ($school['license_until']) {
                     <div class="module-icon">👨‍🏫</div>
                     <div>
                         <div class="module-title">Lehrerverwaltung</div>
-                        <div class="module-subtitle">Lehrkräfte & Zuordnungen</div>
+                        <div class="module-subtitle">Lehrkräfte und Passwörter</div>
                     </div>
                 </div>
                 <div class="module-description">
-                    Verwalten Sie Lehreraccounts, weisen Sie Klassen zu und organisieren Sie Berechtigungen.
+                    Legen Sie hier neue Lehreraccounts (Verwaltung und Passwort).
                 </div>
                 <div class="module-status">
                     <span class="status-badge status-active">Verfügbar</span>
@@ -469,11 +469,11 @@ if ($school['license_until']) {
                     <div class="module-icon">📚</div>
                     <div>
                         <div class="module-title">Fächerverwaltung</div>
-                        <div class="module-subtitle">Schulfächer & Curricula</div>
+                        <div class="module-subtitle">Schulfächer</div>
                     </div>
                 </div>
                 <div class="module-description">
-                    Definieren Sie Schulfächer, erstellen Sie Lehrpläne und ordnen Sie Fächer den Klassen zu.
+                    Legen Sie hier Fächer für Ihre Schule an.
                 </div>
                 <div class="module-status">
                     <span class="status-badge status-active">Verfügbar</span>
@@ -485,14 +485,14 @@ if ($school['license_until']) {
                     <div class="module-icon">💪</div>
                     <div>
                         <div class="module-title">Stärkenverwaltung</div>
-                        <div class="module-subtitle">Kompetenz-Profile</div>
+                        <div class="module-subtitle">Kompetenzen und Stärken</div>
                     </div>
                 </div>
                 <div class="module-description">
                     Verwalten Sie Kompetenzbereiche und Stärkenprofile für eine differenzierte Bewertung.
                 </div>
                 <div class="module-status">
-                    <span class="status-badge status-coming-soon">Geplant</span>
+                    <span class="status-badge status-active">Verfügbar</span>
                 </div>
             </a>
 
@@ -501,11 +501,11 @@ if ($school['license_until']) {
                     <div class="module-icon">📝</div>
                     <div>
                         <div class="module-title">Dokumentvorlagen</div>
-                        <div class="module-subtitle">Zeugnisse & Berichte</div>
+                        <div class="module-subtitle">Dokument mit Platzhaltern</div>
                     </div>
                 </div>
                 <div class="module-description">
-                    Verwalten Sie Dokumentvorlagen mit Platzhaltern für automatisierte Zeugniserstellung.
+                    Verwalten Sie die Vorlage mit Platzhaltern für automatisierte Rückmeldung.
                 </div>
                 <div class="module-status">
                     <span class="status-badge status-active">Verfügbar</span>
@@ -521,26 +521,10 @@ if ($school['license_until']) {
                     </div>
                 </div>
                 <div class="module-description">
-                    Exportieren Sie Schuldaten, erstellen Sie Backups oder bereinigen Sie Daten für eine Neueinrichtung.
+                    Verwalten Sie die Daten Ihrer Schule.
                 </div>
                 <div class="module-status">
                     <span class="status-badge status-active">Verfügbar</span>
-                </div>
-            </a>
-
-            <a href="admin_uebersicht.php" class="module-card">
-                <div class="module-header">
-                    <div class="module-icon">📊</div>
-                    <div>
-                        <div class="module-title">Gesamtübersicht</div>
-                        <div class="module-subtitle">Analytics & Trends</div>
-                    </div>
-                </div>
-                <div class="module-description">
-                    Analysieren Sie Leistungsdaten, verfolgen Sie Trends und erhalten Sie detaillierte Einblicke.
-                </div>
-                <div class="module-status">
-                    <span class="status-badge status-coming-soon">Geplant</span>
                 </div>
             </a>
 
@@ -553,10 +537,10 @@ if ($school['license_until']) {
                     </div>
                 </div>
                 <div class="module-description">
-                    Verwalten Sie Schulnachrichten, senden Sie Mitteilungen und informieren Sie über wichtige Updates.
+                    Schreibe oder Informieren Sie hier die Kollegen im System.
                 </div>
                 <div class="module-status">
-                    <span class="status-badge status-coming-soon">Geplant</span>
+                    <span class="status-badge status-active">Verfügbar</span>
                 </div>
             </a>
         </div>

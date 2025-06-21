@@ -303,7 +303,7 @@ try {
 </head>
 <body>
     <div class="container">
-        <a href="dashboard.php" class="back-link">← Zurück zum Dashboard</a>
+        <a href="dashboard.php" class="back-link">🏠 zurück zum Dashboardd</a>
         
         <h1>Admin News verwalten</h1>
         

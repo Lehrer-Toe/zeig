@@ -1,5 +1,7 @@
 <?php
 // Diese Datei wird von dashboard.php eingebunden
+// POST-Verarbeitung erfolgt bereits in dashboard.php!
+
 // Wichtige Variablen aus dashboard.php verfügbar machen
 $school_id = $_SESSION['school_id'] ?? null;
 // $teacher_id kommt bereits von dashboard.php - NICHT überschreiben!
@@ -42,7 +44,7 @@ if (isset($_GET['rate']) && isset($_GET['group'])) {
     if (!$student_info) {
         $_SESSION['flash_message'] = 'Sie sind nicht berechtigt, diesen Schüler zu bewerten.';
         $_SESSION['flash_type'] = 'error';
-        header('Location: ' . $_SERVER['PHP_SELF'] . '?page=bewerten');
+        echo '<script>window.location.href = "?page=bewerten";</script>';
         exit();
     }
     
@@ -1184,7 +1186,8 @@ if (!$last_template_id) {
                     Bewertungsvorlage: <?= htmlspecialchars($template_name) ?>
                 </div>
                 
-                <form method="POST" class="rating-form" id="ratingForm">
+                <form method="POST" action="<?= $_SERVER['PHP_SELF'] ?>?page=bewerten" class="rating-form" id="ratingForm">
+                    <input type="hidden" name="form_action" value="save_rating">
                     <input type="hidden" name="student_id" value="<?= $student_id ?>">
                     <input type="hidden" name="group_id" value="<?= $group_id ?>">
                     <input type="hidden" name="template_id" value="<?= $template_id ?>">
@@ -1193,14 +1196,12 @@ if (!$last_template_id) {
                     <div class="final-grade-section" id="finalGradeSection">
                         <div class="final-grade-row">
                             <label class="final-grade-label">Endnote:</label>
-                            <input type="number" 
+                            <input type="text" 
                                    name="final_grade" 
                                    id="finalGrade"
                                    class="final-grade-input" 
-                                   min="1" 
-                                   max="6" 
-                                   step="0.1" 
-                                   value="<?= $current_rating ? number_format($current_rating['final_grade'], 1, '.', '') : '' ?>"
+                                   pattern="[1-6]([,\.][0-9])?"
+                                   value="<?= $current_rating ? number_format($current_rating['final_grade'], 1, ',', '') : '' ?>"
                                    placeholder="-">
                             <button type="button" class="btn btn-takeover" onclick="takeOverAverage()">
                                 Durchschnitt übernehmen
@@ -1244,7 +1245,7 @@ if (!$last_template_id) {
                     
                     <div class="form-actions">
                         <button type="submit" name="save_with_average" value="1" class="btn btn-save" 
-                                onclick="takeOverAverage(); localStorage.setItem('goToStrengthsTab', 'true');">
+                                onclick="takeOverAverage(); return true;">
                             Speichern und Durchschnitt übernehmen
                         </button>
                         <button type="submit" name="save_and_close" value="1" class="btn btn-save">
@@ -1267,7 +1268,8 @@ if (!$last_template_id) {
                 </div>
                 
                 <?php if (!empty($strength_categories)): ?>
-                    <form method="POST" class="strengths-form" id="strengthsForm">
+                    <form method="POST" action="<?= $_SERVER['PHP_SELF'] ?>?page=bewerten" class="strengths-form" id="strengthsForm">
+                        <input type="hidden" name="form_action" value="save_strengths">
                         <input type="hidden" name="student_id" value="<?= $student_id ?>">
                         <input type="hidden" name="group_id" value="<?= $group_id ?>">
                         <input type="hidden" name="csrf_token" value="<?= $_SESSION['csrf_token'] ?>">
@@ -1302,11 +1304,10 @@ if (!$last_template_id) {
                         <?php endforeach; ?>
                         
                         <div class="form-actions">
-                            <button type="submit" name="save_and_continue" class="btn btn-save">
+                            <button type="submit" name="save_and_continue" value="1" class="btn btn-save">
                                 Stärken speichern
                             </button>
-                            <button type="submit" name="save_and_close" class="btn btn-save" 
-                                    onclick="localStorage.setItem('goToOverview', 'true');">
+                            <button type="submit" name="save_and_close" value="1" class="btn btn-save">
                                 Speichern und schließen
                             </button>
                             <button type="button" class="btn btn-secondary" onclick="window.location.href='?page=bewerten'">
@@ -1427,7 +1428,7 @@ function takeOverAverage() {
     const averageText = document.getElementById('averageValue').textContent;
     const averageMatch = averageText.match(/[\d,]+/);
     if (averageMatch && averageMatch[0] !== '-') {
-        document.getElementById('finalGrade').value = averageMatch[0].replace(',', '.');
+        document.getElementById('finalGrade').value = averageMatch[0];
     }
 }
 
@@ -1443,27 +1444,8 @@ function updateStrengthCount() {
     }, 200);
 }
 
-// Box ist immer sichtbar - keine Visibility-Checks mehr nötig
-
 // Event Listeners
 document.addEventListener('DOMContentLoaded', function() {
-    // Prüfen ob zur Übersicht gewechselt werden soll
-    if (localStorage.getItem('goToOverview') === 'true') {
-        localStorage.removeItem('goToOverview');
-        window.location.href = '?page=bewerten';
-        return;
-    }
-    
-    // Prüfen ob zum Stärken-Tab gewechselt werden soll
-    if (localStorage.getItem('goToStrengthsTab') === 'true') {
-        localStorage.removeItem('goToStrengthsTab');
-        // Nur wechseln wenn wir im Rating-Tab sind
-        <?php if ($rating_mode && $active_tab === 'rating'): ?>
-            // Die bereits existierende switchTab Funktion verwenden
-            switchTab('strengths');
-        <?php endif; ?>
-    }
-    
     // Flash Messages automatisch ausblenden
     setTimeout(() => {
         document.querySelectorAll('.flash-message').forEach(msg => {

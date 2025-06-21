@@ -914,7 +914,7 @@ if (isset($_GET['ajax'])) {
                 <a href="dashboard.php">Dashboard</a> / Klassenverwaltung
             </div>
         </div>
-        <a href="dashboard.php" class="btn btn-secondary">🏠 Dashboard</a>
+        <a href="dashboard.php" class="btn btn-secondary">🏠 zurück zum Dashboard</a>
     </div>
 
     <div class="container">

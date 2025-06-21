@@ -108,18 +108,38 @@ $stmt = $db->prepare("SELECT * FROM platzhalter_mappings WHERE school_id = ? ORD
 $stmt->execute([$school_id]);
 $mappings = $stmt->fetchAll();
 
-// Verfügbare Datenbankfelder
+// Verfügbare Datenbankfelder mit klarer Zuordnung
 $availableFields = [
-    'student_name' => 'Schülername',
-    'project_name' => 'Projektname',
-    'note' => 'Note',
-    'strengths' => 'Stärken',
-    'date' => 'Aktuelles Datum',
-    'teacher_name' => 'Lehrkraft',
-    'class_name' => 'Klasse',
-    'school_year' => 'Schuljahr',
-    'subject' => 'Fach',
-    'comment' => 'Bemerkung'
+    // SCHÜLERDATEN (aus Tabelle: students)
+    'student_name' => 'Schülername (Vor- und Nachname)',
+    'student_firstname' => 'Vorname des Schülers',
+    'student_lastname' => 'Nachname des Schülers',
+    
+    // PROJEKTDATEN (aus Tabelle: groups)
+    'project_name' => 'Projektname/Gruppenname',
+    
+    // PRÜFUNGSFACH (aus Tabelle: subjects über group_students)
+    'exam_subject' => 'Prüfungsfach (vollständiger Name)',
+    'exam_subject_short' => 'Prüfungsfach (Kürzel)',
+    
+    // BEWERTUNGEN (aus Tabelle: ratings)
+    'final_grade' => 'Gesamtnote (z.B. 2,3)',
+    'comment' => 'Kommentar/Bemerkung',
+    
+    // STÄRKEN (aus Tabelle: strength_items über rating_strengths)
+    'strengths_list' => 'Stärken (als Liste)',
+    
+    // SCHUL- UND KLASSENDATEN
+    'class_name' => 'Klassenbezeichnung',
+    'school_name' => 'Schulname',
+    'school_year' => 'Schuljahr (berechnet)',
+    
+    // LEHRKRAFT (aus Tabelle: users)
+    'teacher_name' => 'Name der Lehrkraft',
+    
+    // DATUM
+    'current_date' => 'Aktuelles Datum',
+    'current_date_long' => 'Datum ausgeschrieben'
 ];
 ?>
 
@@ -289,7 +309,7 @@ $availableFields = [
 
         .placeholder-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
             gap: 20px;
             margin-top: 20px;
         }
@@ -407,6 +427,40 @@ $availableFields = [
         select {
             cursor: pointer;
         }
+
+        .db-info {
+            font-size: 11px;
+            color: #888;
+            margin-top: 5px;
+        }
+
+        .standard-placeholders {
+            background: #0d0d0d;
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 20px;
+        }
+
+        .standard-placeholders h3 {
+            color: #667eea;
+            margin-bottom: 15px;
+            font-size: 1.2em;
+        }
+
+        .placeholder-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 10px;
+        }
+
+        .placeholder-item {
+            padding: 8px;
+            background: #1a1a1a;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 14px;
+            color: #e0e0e0;
+        }
     </style>
 </head>
 <body>
@@ -457,11 +511,44 @@ $availableFields = [
             </form>
         </div>
 
-        <!-- Platzhalter verwalten -->
+        <!-- Standard-Platzhalter -->
         <div class="section">
-            <h2>Platzhalter verwalten</h2>
+            <h2>Verfügbare Standard-Platzhalter</h2>
             <div class="info-box">
-                <p>Definieren Sie Platzhalter, die in Ihrer Dokumentvorlage verwendet werden. Diese werden beim PDF-Export automatisch mit den entsprechenden Daten gefüllt.</p>
+                <p>Diese Platzhalter können Sie direkt in Ihrer Dokumentvorlage verwenden. Sie werden automatisch mit den entsprechenden Daten gefüllt.</p>
+            </div>
+            
+            <div class="standard-placeholders">
+                <h3>Kopieren Sie diese Platzhalter in Ihre Vorlage:</h3>
+                <div class="placeholder-list">
+                    <div class="placeholder-item">[Schülername]</div>
+                    <div class="placeholder-item">[Vorname]</div>
+                    <div class="placeholder-item">[Nachname]</div>
+                    <div class="placeholder-item">[Projektname]</div>
+                    <div class="placeholder-item">[Prüfungsfach]</div>
+                    <div class="placeholder-item">[Fach Kürzel]</div>
+                    <div class="placeholder-item">[Note]</div>
+                    <div class="placeholder-item">[Gesamtnote]</div>
+                    <div class="placeholder-item">[Note in Textform]</div>
+                    <div class="placeholder-item">[Stärken]</div>
+                    <div class="placeholder-item">[Kommentar]</div>
+                    <div class="placeholder-item">[Bemerkung]</div>
+                    <div class="placeholder-item">[Klasse]</div>
+                    <div class="placeholder-item">[Schule]</div>
+                    <div class="placeholder-item">[Schulname]</div>
+                    <div class="placeholder-item">[Schuljahr]</div>
+                    <div class="placeholder-item">[Lehrkraft]</div>
+                    <div class="placeholder-item">[Datum]</div>
+                    <div class="placeholder-item">[Datum lang]</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Eigene Platzhalter verwalten -->
+        <div class="section">
+            <h2>Eigene Platzhalter verwalten</h2>
+            <div class="info-box">
+                <p>Erstellen Sie eigene Platzhalter und verknüpfen Sie diese mit Datenbankfeldern.</p>
             </div>
 
             <!-- Neuen Platzhalter hinzufügen -->
@@ -505,6 +592,11 @@ $availableFields = [
                                         </option>
                                     <?php endforeach; ?>
                                 </select>
+                                <div class="db-info">
+                                    <?php if ($mapping['datenbank_feld'] && isset($availableFields[$mapping['datenbank_feld']])): ?>
+                                        Aktuell: <?php echo htmlspecialchars($availableFields[$mapping['datenbank_feld']]); ?>
+                                    <?php endif; ?>
+                                </div>
                             </div>
                         </form>
                         
@@ -527,17 +619,32 @@ $availableFields = [
                 <h3>So funktioniert's:</h3>
                 <ol style="margin-left: 20px; margin-top: 10px;">
                     <li>Erstellen Sie Ihre Dokumentvorlage in Word, LibreOffice oder einem anderen Textverarbeitungsprogramm</li>
-                    <li>Fügen Sie Platzhalter ein, z.B. <strong>[Name]</strong>, <strong>[Note]</strong>, <strong>[Stärken]</strong></li>
+                    <li>Fügen Sie die Platzhalter aus der obigen Liste ein (z.B. <strong>[Schülername]</strong>, <strong>[Note]</strong>, <strong>[Prüfungsfach]</strong>)</li>
+                    <li>Formatieren Sie die Vorlage nach Ihren Wünschen (Schriftart, Größe, Farben bleiben erhalten)</li>
                     <li>Laden Sie die Vorlage hier hoch</li>
-                    <li>Verknüpfen Sie die Platzhalter mit den entsprechenden Datenbankfeldern</li>
-                    <li>Beim PDF-Export werden die Platzhalter automatisch ersetzt</li>
+                    <li>Beim PDF-Export werden die Platzhalter automatisch mit den Daten ersetzt</li>
                 </ol>
                 
-                <h3 style="margin-top: 20px;">Spezielle Platzhalter:</h3>
+                <h3 style="margin-top: 20px;">Wichtige Platzhalter:</h3>
                 <ul style="margin-left: 20px; margin-top: 10px;">
-                    <li><strong>[Stärken]</strong> - Listet alle Stärken untereinander auf</li>
-                    <li><strong>[Datum]</strong> - Fügt das aktuelle Datum ein</li>
-                    <li><strong>[Note]</strong> - Zeigt die Gesamtnote an</li>
+                    <li><strong>[Prüfungsfach]</strong> - Das Fach, das dem Schüler in der Gruppe zugeordnet wurde</li>
+                    <li><strong>[Fach Kürzel]</strong> - Das Kürzel des Prüfungsfachs (z.B. "D" für Deutsch)</li>
+                    <li><strong>[Stärken]</strong> - Listet alle ausgewählten Stärken als Aufzählung auf</li>
+                    <li><strong>[Note]</strong> oder <strong>[Gesamtnote]</strong> - Die finale Bewertung (z.B. 2,3)</li>
+                    <li><strong>[Note in Textform]</strong> - Die Note ausgeschrieben (z.B. "gut")</li>
+                    <li><strong>[Datum]</strong> - Aktuelles Datum im Format TT.MM.JJJJ</li>
+                    <li><strong>[Datum lang]</strong> - Datum ausgeschrieben (z.B. "21. Juni 2025")</li>
+                </ul>
+
+                <h3 style="margin-top: 20px;">Datenbankfelder:</h3>
+                <p style="margin-top: 10px;">Die Daten kommen aus folgenden Quellen:</p>
+                <ul style="margin-left: 20px; margin-top: 10px;">
+                    <li><strong>Schülerdaten</strong> - aus der Tabelle "students"</li>
+                    <li><strong>Projektname</strong> - aus der Tabelle "groups"</li>
+                    <li><strong>Prüfungsfach</strong> - aus der Tabelle "subjects" (über die Schüler-Gruppen-Zuordnung)</li>
+                    <li><strong>Bewertungen & Kommentare</strong> - aus der Tabelle "ratings"</li>
+                    <li><strong>Stärken</strong> - aus der Tabelle "strength_items"</li>
+                    <li><strong>Schul- und Klassendaten</strong> - aus den Tabellen "schools" und "classes"</li>
                 </ul>
             </div>
         </div>

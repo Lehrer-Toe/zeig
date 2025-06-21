@@ -354,7 +354,7 @@ try {
                 <a href="dashboard.php">Dashboard</a> > Fächer verwalten
             </div>
         </div>
-        <a href="dashboard.php" class="btn btn-secondary">↩️ Zurück</a>
+        <a href="dashboard.php" class="btn btn-secondary">🏠 zurück zum Dashboard</a>
     </div>
 
     <div class="container">

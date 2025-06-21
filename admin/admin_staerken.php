@@ -854,7 +854,7 @@ foreach ($categories as $category) {
                 <a href="dashboard.php">Dashboard</a> / Stärkenverwaltung
             </div>
         </div>
-        <a href="dashboard.php" class="btn btn-secondary">🏠 Dashboard</a>
+        <a href="dashboard.php" class="btn btn-secondary">🏠 zurück zum Dashboard</a>
     </div>
 
     <div class="container">

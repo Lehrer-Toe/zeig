@@ -906,7 +906,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 <h1><i class="fas fa-database"></i> Datenmanagement</h1>
                 <nav>
                     <a href="dashboard.php" class="nav-link">
-                        <i class="fas fa-arrow-left"></i> Zurück zum Dashboard
+                        <i class="fas fa-arrow-left"></i> 🏠 zurück zum Dashboard
                     </a>
                 </nav>
             </div>

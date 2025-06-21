@@ -20,6 +20,123 @@ $db = getDB();
 $messages = [];
 $errors = [];
 
+// === SICHERE LÖSCHFUNKTIONEN ===
+function deleteTeacherSafely($teacher_id, $school_id, $db) {
+    try {
+        $db->beginTransaction();
+        
+        // Lehrer-Info abrufen
+        $stmt = $db->prepare("SELECT name, email FROM users WHERE id = ? AND school_id = ? AND user_type = 'lehrer'");
+        $stmt->execute([$teacher_id, $school_id]);
+        $teacher = $stmt->fetch();
+        
+        if (!$teacher) {
+            throw new Exception('Lehrer nicht gefunden');
+        }
+        
+        // Statistiken sammeln
+        $stats = [];
+        
+        $stmt = $db->prepare("SELECT COUNT(*) FROM group_students gs JOIN groups g ON gs.group_id = g.id WHERE gs.examiner_teacher_id = ? AND g.school_id = ?");
+        $stmt->execute([$teacher_id, $school_id]);
+        $stats['examiner_assignments'] = $stmt->fetchColumn();
+        
+        $stmt = $db->prepare("SELECT COUNT(*) FROM groups WHERE teacher_id = ? AND school_id = ? AND is_active = 1");
+        $stmt->execute([$teacher_id, $school_id]);
+        $stats['groups_affected'] = $stmt->fetchColumn();
+        
+        $stmt = $db->prepare("SELECT COUNT(*) FROM topics WHERE teacher_id = ? AND school_id = ? AND is_active = 1");
+        $stmt->execute([$teacher_id, $school_id]);
+        $stats['topics_affected'] = $stmt->fetchColumn();
+        
+        // BEREINIGUNG DURCHFÜHREN
+        
+        // 1. Prüferzuordnungen entfernen
+        $stmt = $db->prepare("UPDATE group_students gs JOIN groups g ON gs.group_id = g.id SET gs.examiner_teacher_id = NULL WHERE gs.examiner_teacher_id = ? AND g.school_id = ?");
+        $stmt->execute([$teacher_id, $school_id]);
+        
+        // 2. assigned_by Zuordnungen entfernen
+        $stmt = $db->prepare("UPDATE group_students gs JOIN groups g ON gs.group_id = g.id SET gs.assigned_by = NULL WHERE gs.assigned_by = ? AND g.school_id = ?");
+        $stmt->execute([$teacher_id, $school_id]);
+        
+        // 3. Gruppen deaktivieren
+        $stmt = $db->prepare("UPDATE groups SET is_active = 0, updated_at = NOW() WHERE teacher_id = ? AND school_id = ?");
+        $stmt->execute([$teacher_id, $school_id]);
+        
+        // 4. Themen deaktivieren
+        $stmt = $db->prepare("UPDATE topics SET is_active = 0, updated_at = NOW() WHERE teacher_id = ? AND school_id = ?");
+        $stmt->execute([$teacher_id, $school_id]);
+        
+        // 5. Bewertungsvorlagen deaktivieren
+        $stmt = $db->prepare("UPDATE rating_templates SET is_active = 0 WHERE teacher_id = ? AND is_standard = 0");
+        $stmt->execute([$teacher_id]);
+        
+        // 6. Sessions und Benachrichtigungen löschen
+        $stmt = $db->prepare("DELETE FROM user_sessions WHERE user_id = ?");
+        $stmt->execute([$teacher_id]);
+        
+        try {
+            $stmt = $db->prepare("DELETE FROM group_assignment_notifications WHERE teacher_id = ?");
+            $stmt->execute([$teacher_id]);
+        } catch (Exception $e) {
+            // Tabelle existiert möglicherweise nicht - ignorieren
+        }
+        
+        try {
+            $stmt = $db->prepare("DELETE FROM news_read_status WHERE teacher_id = ?");
+            $stmt->execute([$teacher_id]);
+        } catch (Exception $e) {
+            // Tabelle existiert möglicherweise nicht - ignorieren
+        }
+        
+        // 7. Lehrer löschen (Hard Delete)
+        $stmt = $db->prepare("DELETE FROM users WHERE id = ?");
+        $stmt->execute([$teacher_id]);
+        
+        $db->commit();
+        
+        return [
+            'success' => true,
+            'message' => "Lehrer '{$teacher['name']}' erfolgreich gelöscht.",
+            'stats' => $stats
+        ];
+        
+    } catch (Exception $e) {
+        $db->rollBack();
+        return [
+            'success' => false,
+            'message' => 'Fehler beim Löschen: ' . $e->getMessage(),
+            'stats' => []
+        ];
+    }
+}
+
+function cleanupOrphanedAssignments($school_id, $db) {
+    try {
+        $db->beginTransaction();
+        
+        $stmt = $db->prepare("UPDATE group_students gs LEFT JOIN users u ON gs.examiner_teacher_id = u.id JOIN groups g ON gs.group_id = g.id SET gs.examiner_teacher_id = NULL WHERE gs.examiner_teacher_id IS NOT NULL AND u.id IS NULL AND g.school_id = ?");
+        $stmt->execute([$school_id]);
+        $cleaned_examiner = $stmt->rowCount();
+        
+        $stmt = $db->prepare("UPDATE group_students gs LEFT JOIN users u ON gs.assigned_by = u.id JOIN groups g ON gs.group_id = g.id SET gs.assigned_by = NULL WHERE gs.assigned_by IS NOT NULL AND u.id IS NULL AND g.school_id = ?");
+        $stmt->execute([$school_id]);
+        $cleaned_assigned = $stmt->rowCount();
+        
+        $db->commit();
+        
+        return [
+            'success' => true,
+            'cleaned_examiner' => $cleaned_examiner,
+            'cleaned_assigned' => $cleaned_assigned
+        ];
+        
+    } catch (Exception $e) {
+        $db->rollBack();
+        return ['success' => false, 'error' => $e->getMessage()];
+    }
+}
+
 // Datenbankschema prüfen und erweitern
 $hasGroupsColumn = false;
 $hasPasswordAdminColumn = false;
@@ -181,6 +298,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $action = $_POST['action'] ?? '';
         
         switch ($action) {
+            case 'delete_teacher_safe':
+                $teacher_id = (int)($_POST['teacher_id'] ?? 0);
+                
+                if ($teacher_id <= 0) {
+                    $errors[] = 'Ungültige Lehrer-ID.';
+                } else {
+                    $result = deleteTeacherSafely($teacher_id, $user['school_id'], $db);
+                    
+                    if ($result['success']) {
+                        $message = $result['message'];
+                        $stats = $result['stats'];
+                        if ($stats['examiner_assignments'] > 0) {
+                            $message .= " {$stats['examiner_assignments']} Prüferzuordnungen bereinigt.";
+                        }
+                        if ($stats['groups_affected'] > 0) {
+                            $message .= " {$stats['groups_affected']} Gruppen deaktiviert.";
+                        }
+                        if ($stats['topics_affected'] > 0) {
+                            $message .= " {$stats['topics_affected']} Themen deaktiviert.";
+                        }
+                        $messages[] = $message;
+                    } else {
+                        $errors[] = $result['message'];
+                    }
+                }
+                break;
+                
+            case 'cleanup_orphaned':
+                $result = cleanupOrphanedAssignments($user['school_id'], $db);
+                
+                if ($result['success']) {
+                    $messages[] = "Bereinigung erfolgreich: {$result['cleaned_examiner']} Prüferzuordnungen und {$result['cleaned_assigned']} Zuweisungen korrigiert.";
+                } else {
+                    $errors[] = 'Fehler bei der Bereinigung: ' . $result['error'];
+                }
+                break;
+                
             case 'create_teacher':
                 $name = trim($_POST['teacher_name'] ?? '');
                 $email = trim($_POST['teacher_email'] ?? '');
@@ -490,6 +644,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
+// Verwaiste Zuordnungen prüfen
+$stmt = $db->prepare("
+    SELECT COUNT(*) as orphaned_count,
+           GROUP_CONCAT(DISTINCT CONCAT(s.first_name, ' ', s.last_name) SEPARATOR ', ') as affected_students
+    FROM group_students gs
+    LEFT JOIN users u ON gs.examiner_teacher_id = u.id
+    JOIN groups g ON gs.group_id = g.id
+    JOIN students s ON gs.student_id = s.id
+    WHERE gs.examiner_teacher_id IS NOT NULL 
+    AND u.id IS NULL 
+    AND g.school_id = ?
+");
+$stmt->execute([$user['school_id']]);
+$orphaned_stats = $stmt->fetch();
+
 // Ansichtsmodus (Liste oder Kacheln)
 $viewMode = $_GET['view'] ?? 'list'; // 'list' oder 'cards' - Liste ist Standard
 
@@ -644,6 +813,12 @@ if (!$hasGroupsColumn) {
             background: rgba(239, 68, 68, 0.1);
             border: 1px solid rgba(239, 68, 68, 0.3);
             color: #fca5a5;
+        }
+
+        .flash-warning {
+            background: rgba(245, 158, 11, 0.1);
+            border: 1px solid rgba(245, 158, 11, 0.3);
+            color: #fbbf24;
         }
 
         .error-list {
@@ -804,6 +979,63 @@ if (!$hasGroupsColumn) {
         .btn-sm {
             padding: 0.25rem 0.75rem;
             font-size: 0.8rem;
+        }
+
+        /* Orphaned Warning Styles */
+        .orphaned-warning {
+            background: rgba(245, 158, 11, 0.1);
+            border: 2px solid rgba(245, 158, 11, 0.3);
+            border-radius: 1rem;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .orphaned-warning h4 {
+            color: #fbbf24;
+            margin-bottom: 0.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .orphaned-warning p {
+            color: #fbbf24;
+            margin-bottom: 1rem;
+        }
+
+        .safe-delete-section {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            border-radius: 1rem;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .safe-delete-section h3 {
+            color: #ef4444;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .warning-box {
+            background: rgba(245, 158, 11, 0.1);
+            border: 1px solid rgba(245, 158, 11, 0.3);
+            border-radius: 0.5rem;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .warning-box h4 {
+            color: #fbbf24;
+            margin-bottom: 0.5rem;
+        }
+
+        .warning-box ul {
+            color: #fbbf24;
+            margin-left: 1.5rem;
+            font-size: 0.9rem;
         }
 
         /* Kachel-Ansicht */
@@ -980,7 +1212,7 @@ if (!$hasGroupsColumn) {
                 color: black !important;
             }
             
-            .header, .upload-section, .main-controls, .actions-header, .view-actions, .view-toggle, .stats-grid, .teacher-actions, .table-actions, .modal {
+            .header, .upload-section, .main-controls, .actions-header, .view-actions, .view-toggle, .stats-grid, .teacher-actions, .table-actions, .modal, .orphaned-warning, .safe-delete-section {
                 display: none !important;
             }
             
@@ -1165,7 +1397,7 @@ if (!$hasGroupsColumn) {
                 <a href="dashboard.php">Dashboard</a> > Lehrer verwalten
             </div>
         </div>
-        <a href="dashboard.php" class="btn btn-secondary">↩️ Zurück</a>
+        <a href="dashboard.php" class="btn btn-secondary">🏠 zurück zum Dashboard</a>
     </div>
 
     <div class="container">
@@ -1201,6 +1433,28 @@ if (!$hasGroupsColumn) {
                         <li><?php echo htmlspecialchars($error); ?></li>
                     <?php endforeach; ?>
                 </ul>
+            </div>
+        <?php endif; ?>
+
+        <!-- Verwaiste Zuordnungen Warnung -->
+        <?php if ($orphaned_stats['orphaned_count'] > 0): ?>
+            <div class="orphaned-warning">
+                <h4>⚠️ Dateninkonsistenz gefunden</h4>
+                <p><strong><?php echo $orphaned_stats['orphaned_count']; ?></strong> verwaiste Lehrerzuordnungen gefunden. 
+                   Diese entstehen, wenn Lehrer gelöscht wurden, ohne die Zuordnungen zu bereinigen.</p>
+                
+                <?php if (!empty($orphaned_stats['affected_students'])): ?>
+                    <p><strong>Betroffene Schüler:</strong> <?php echo htmlspecialchars(substr($orphaned_stats['affected_students'], 0, 100)); ?>
+                    <?php if (strlen($orphaned_stats['affected_students']) > 100): ?>...<?php endif; ?></p>
+                <?php endif; ?>
+                
+                <form method="POST" style="margin-top: 1rem;" onsubmit="return confirm('Alle verwaisten Zuordnungen bereinigen?')">
+                    <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
+                    <input type="hidden" name="action" value="cleanup_orphaned">
+                    <button type="submit" class="btn btn-warning">
+                        🧹 Jetzt bereinigen
+                    </button>
+                </form>
             </div>
         <?php endif; ?>
 
@@ -1295,7 +1549,7 @@ if (!$hasGroupsColumn) {
             </form>
         </div>
 
-        <!-- Aktionen und Ansichtsumschaltung - NACH dem "Neuen Lehrer anlegen" Formular -->
+        <!-- Aktionen und Ansichtsumschaltung -->
         <div class="controls">
             <div class="actions-header">
                 <form method="POST" action="" style="display: inline;">
@@ -1392,17 +1646,6 @@ if (!$hasGroupsColumn) {
                                     </button>
                                 </form>
                                 <?php endif; ?>
-                                
-                                <!-- Löschen -->
-                                <form method="POST" action="" style="display: inline;">
-                                    <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
-                                    <input type="hidden" name="action" value="delete_teacher">
-                                    <input type="hidden" name="teacher_id" value="<?php echo $teacher['id']; ?>">
-                                    <button type="submit" class="btn btn-danger btn-sm" 
-                                            onclick="return confirm('Sind Sie sicher, dass Sie <?php echo htmlspecialchars($teacher['name']); ?> löschen möchten?')">
-                                        🗑️ Löschen
-                                    </button>
-                                </form>
                             </div>
                         </div>
                     <?php endforeach; ?>
@@ -1477,17 +1720,6 @@ if (!$hasGroupsColumn) {
                                                 </button>
                                             </form>
                                             <?php endif; ?>
-                                            
-                                            <!-- Löschen -->
-                                            <form method="POST" action="" style="display: inline;">
-                                                <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
-                                                <input type="hidden" name="action" value="delete_teacher">
-                                                <input type="hidden" name="teacher_id" value="<?php echo $teacher['id']; ?>">
-                                                <button type="submit" class="btn btn-danger btn-sm" title="Löschen"
-                                                        onclick="return confirm('Sind Sie sicher, dass Sie <?php echo htmlspecialchars($teacher['name']); ?> löschen möchten?')">
-                                                    🗑️
-                                                </button>
-                                            </form>
                                         </div>
                                     </td>
                                 </tr>
@@ -1497,6 +1729,50 @@ if (!$hasGroupsColumn) {
                 </div>
             <?php endif; ?>
         <?php endif; ?>
+
+        <!-- Lehrer löschen - nach unten verschoben -->
+        <div class="safe-delete-section">
+            <h3>🗑️ Lehrer löschen</h3>
+            <p style="margin-bottom: 1rem; opacity: 0.8;">
+                Diese Funktion löscht einen Lehrer und bereinigt automatisch alle seine Zuordnungen.
+            </p>
+            
+            <div class="warning-box">
+                <h4>⚠️ Was passiert beim sicheren Löschen?</h4>
+                <ul>
+                    <li>Alle Prüferzuordnungen werden entfernt</li>
+                    <li>Alle Gruppen des Lehrers werden deaktiviert</li>
+                    <li>Alle Themen des Lehrers werden deaktiviert</li>
+                    <li>Bewertungen bleiben erhalten (anonymisiert)</li>
+                    <li>Betroffene Schüler müssen neu zugeordnet werden</li>
+                </ul>
+            </div>
+            
+            <form method="POST" onsubmit="return confirmTeacherDeletion()">
+                <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
+                <input type="hidden" name="action" value="delete_teacher_safe">
+                
+                <div style="display: grid; grid-template-columns: 1fr auto; gap: 1rem; align-items: end;">
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label for="teacher_id_safe">Lehrer auswählen:</label>
+                        <select name="teacher_id" id="teacher_id_safe" required>
+                            <option value="">-- Lehrer auswählen --</option>
+                            <?php foreach ($teachers as $teacher): ?>
+                                <option value="<?php echo $teacher['id']; ?>"
+                                        data-name="<?php echo htmlspecialchars($teacher['name']); ?>">
+                                    <?php echo htmlspecialchars($teacher['name']); ?> 
+                                    (<?php echo htmlspecialchars($teacher['email']); ?>)
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    
+                    <button type="submit" class="btn btn-danger">
+                        🗑️ Sicher löschen
+                    </button>
+                </div>
+            </form>
+        </div>
     </div>
 
     <!-- Modal für Bearbeitung -->
@@ -1579,6 +1855,29 @@ if (!$hasGroupsColumn) {
         
         function closeEditModal() {
             document.getElementById('editModal').classList.remove('show');
+        }
+        
+        function confirmTeacherDeletion() {
+            const select = document.getElementById('teacher_id_safe');
+            const option = select.selectedOptions[0];
+            
+            if (!option.value) {
+                alert('Bitte wählen Sie einen Lehrer aus.');
+                return false;
+            }
+            
+            const teacherName = option.dataset.name;
+            
+            let warning = `ACHTUNG: Sie sind dabei, den Lehrer "${teacherName}" sicher zu löschen.\n\n`;
+            warning += `Dies wird folgende Auswirkungen haben:\n`;
+            warning += `• Alle Prüferzuordnungen werden entfernt\n`;
+            warning += `• Alle Gruppen des Lehrers werden deaktiviert\n`;
+            warning += `• Alle Themen des Lehrers werden deaktiviert\n`;
+            warning += `• Betroffene Schüler müssen neu zugeordnet werden\n`;
+            warning += `• Bewertungen bleiben erhalten\n\n`;
+            warning += `Sind Sie sicher, dass Sie fortfahren möchten?`;
+            
+            return confirm(warning);
         }
         
         function printTeacherList() {
