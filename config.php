@@ -24,8 +24,10 @@ define('DB_USER', 'd043fe53');
 define('DB_PASS', '@Madita2011');
 define('DB_CHARSET', 'utf8mb4');
 
-// Session und Security Konfiguration
-define('SESSION_LIFETIME', 3600 * 2); // 2 Stunden
+// Session und Security Konfiguration - ERWEITERT
+define('SESSION_LIFETIME', 1800); // 30 Minuten (statt 2 Stunden)
+define('SESSION_INACTIVITY_TIMEOUT', 1800); // 30 Minuten Inaktivität
+define('MAX_CONCURRENT_SESSIONS', 3); // Max. 3 gleichzeitige Sessions pro User
 define('PASSWORD_MIN_LENGTH', 8);
 
 // WICHTIG: db.php suchen und laden
@@ -117,10 +119,203 @@ if (!isset($_SESSION['csrf_token'])) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 }
 
-// Authentifizierungs-Funktionen
-function isLoggedIn() {
-    return isset($_SESSION['user_id']) && isset($_SESSION['user_type']);
+// ===== ERWEITERTE SESSION-SICHERHEIT =====
+
+/**
+ * Session-Aufräumung - abgelaufene Sessions löschen
+ */
+function cleanupExpiredSessions() {
+    $db = getDB();
+    try {
+        $stmt = $db->prepare("DELETE FROM user_sessions WHERE expires_at < NOW()");
+        $stmt->execute();
+    } catch (Exception $e) {
+        error_log("Session cleanup error: " . $e->getMessage());
+    }
 }
+
+/**
+ * Begrenzte Sessions pro User - alte Sessions bei Überschreitung löschen
+ */
+function limitUserSessions($userId, $currentSessionId) {
+    $db = getDB();
+    try {
+        // Anzahl aktiver Sessions für diesen User prüfen
+        $stmt = $db->prepare("
+            SELECT COUNT(*) as session_count, 
+                   GROUP_CONCAT(id ORDER BY created_at ASC) as session_ids
+            FROM user_sessions 
+            WHERE user_id = ? AND expires_at > NOW()
+        ");
+        $stmt->execute([$userId]);
+        $result = $stmt->fetch();
+        
+        if ($result['session_count'] >= MAX_CONCURRENT_SESSIONS) {
+            // Älteste Sessions löschen (außer der aktuellen)
+            $sessionIds = explode(',', $result['session_ids']);
+            $sessionsToDelete = array_diff($sessionIds, [$currentSessionId]);
+            
+            // Nur die ältesten löschen, sodass MAX_CONCURRENT_SESSIONS - 1 übrig bleiben
+            $deleteCount = count($sessionsToDelete) - (MAX_CONCURRENT_SESSIONS - 1);
+            if ($deleteCount > 0) {
+                $sessionsToDeleteLimited = array_slice($sessionsToDelete, 0, $deleteCount);
+                $placeholders = str_repeat('?,', count($sessionsToDeleteLimited) - 1) . '?';
+                $stmt = $db->prepare("DELETE FROM user_sessions WHERE id IN ($placeholders)");
+                $stmt->execute($sessionsToDeleteLimited);
+            }
+        }
+    } catch (Exception $e) {
+        error_log("Session limit error: " . $e->getMessage());
+    }
+}
+
+/**
+ * Erweiterte isLoggedIn-Funktion mit Session-Timeout
+ */
+function isLoggedIn() {
+    // Basis-Check
+    if (!isset($_SESSION['user_id']) || !isset($_SESSION['login_time'])) {
+        return false;
+    }
+    
+    // Session-Timeout prüfen (Inaktivität)
+    $lastActivity = $_SESSION['last_activity'] ?? $_SESSION['login_time'];
+    if (time() - $lastActivity > SESSION_INACTIVITY_TIMEOUT) {
+        logoutUser();
+        $_SESSION['flash_message'] = 'Ihre Session ist aufgrund von Inaktivität abgelaufen.';
+        $_SESSION['flash_type'] = 'warning';
+        return false;
+    }
+    
+    // Absolute Session-Lifetime prüfen
+    if (time() - $_SESSION['login_time'] > SESSION_LIFETIME) {
+        logoutUser();
+        $_SESSION['flash_message'] = 'Ihre Session ist abgelaufen. Bitte melden Sie sich erneut an.';
+        $_SESSION['flash_type'] = 'warning';
+        return false;
+    }
+    
+    // Session in Datenbank prüfen
+    $db = getDB();
+    try {
+        $stmt = $db->prepare("
+            SELECT COUNT(*) as count 
+            FROM user_sessions 
+            WHERE id = ? AND user_id = ? AND expires_at > NOW()
+        ");
+        $stmt->execute([session_id(), $_SESSION['user_id']]);
+        $result = $stmt->fetch();
+        
+        if ($result['count'] == 0) {
+            logoutUser();
+            $_SESSION['flash_message'] = 'Ihre Session wurde aus Sicherheitsgründen beendet.';
+            $_SESSION['flash_type'] = 'warning';
+            return false;
+        }
+    } catch (Exception $e) {
+        error_log("Session validation error: " . $e->getMessage());
+        return false;
+    }
+    
+    // Aktivitätszeit aktualisieren
+    $_SESSION['last_activity'] = time();
+    
+    // Session-Aufräumung gelegentlich durchführen (1% Chance)
+    if (rand(1, 100) === 1) {
+        cleanupExpiredSessions();
+    }
+    
+    return true;
+}
+
+/**
+ * Erweiterte loginUser-Funktion mit Session-Management
+ */
+function loginUser($user) {
+    // Session regenerieren für Sicherheit
+    session_regenerate_id(true);
+    
+    $_SESSION['user_id'] = $user['id'];
+    $_SESSION['user_type'] = $user['user_type'];
+    $_SESSION['email'] = $user['email'];
+    $_SESSION['name'] = $user['name'];
+    if (isset($user['school_id'])) {
+        $_SESSION['school_id'] = $user['school_id'];
+    }
+    $_SESSION['login_time'] = time();
+    $_SESSION['last_activity'] = time();
+    
+    // Session in Datenbank speichern mit Begrenzung
+    $db = getDB();
+    $sessionId = session_id();
+    $expiresAt = date('Y-m-d H:i:s', time() + SESSION_LIFETIME);
+    $ipAddress = $_SERVER['REMOTE_ADDR'] ?? '';
+    $userAgent = $_SERVER['HTTP_USER_AGENT'] ?? '';
+    
+    try {
+        // Alte Sessions begrenzen
+        limitUserSessions($user['id'], $sessionId);
+        
+        // Neue Session speichern
+        $stmt = $db->prepare("
+            INSERT INTO user_sessions (id, user_id, expires_at, ip_address, user_agent) 
+            VALUES (?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE 
+            expires_at = VALUES(expires_at), 
+            ip_address = VALUES(ip_address), 
+            user_agent = VALUES(user_agent)
+        ");
+        $stmt->execute([$sessionId, $user['id'], $expiresAt, $ipAddress, $userAgent]);
+    } catch (Exception $e) {
+        error_log("Login session error: " . $e->getMessage());
+    }
+}
+
+/**
+ * Erweiterte logoutUser-Funktion
+ */
+function logoutUser() {
+    // Session aus Datenbank löschen
+    if (isset($_SESSION['user_id'])) {
+        $db = getDB();
+        try {
+            $stmt = $db->prepare("DELETE FROM user_sessions WHERE id = ?");
+            $stmt->execute([session_id()]);
+        } catch (Exception $e) {
+            error_log("Logout session error: " . $e->getMessage());
+        }
+    }
+    
+    // Session-Variablen löschen (außer Flash-Messages)
+    $flashMessage = $_SESSION['flash_message'] ?? null;
+    $flashType = $_SESSION['flash_type'] ?? null;
+    $csrfToken = $_SESSION['csrf_token'] ?? null;
+    
+    $_SESSION = array();
+    
+    // Flash-Messages und CSRF-Token wiederherstellen
+    if ($flashMessage) {
+        $_SESSION['flash_message'] = $flashMessage;
+        $_SESSION['flash_type'] = $flashType;
+    }
+    if ($csrfToken) {
+        $_SESSION['csrf_token'] = $csrfToken;
+    }
+    
+    // Session-Cookie löschen
+    if (isset($_COOKIE[session_name()])) {
+        setcookie(session_name(), '', time() - 3600, '/');
+    }
+    
+    // Session zerstören und neu starten
+    session_destroy();
+    session_start();
+    
+    // CSRF-Token neu generieren
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
+// ===== BESTEHENDE FUNKTIONEN (unverändert) =====
 
 function getCurrentUser() {
     if (!isLoggedIn()) {
@@ -177,13 +372,19 @@ function authenticateUser($email, $password) {
     try {
         $stmt = $db->prepare("SELECT id, email, password_hash as password, name FROM users WHERE email = ? AND user_type = 'superadmin' AND is_active = 1");
         $stmt->execute([$email]);
-        $user = $stmt->fetch();
+        $superadmin = $stmt->fetch();
         
-        if ($user && password_verify($password, $user['password'])) {
-            return ['id' => $user['id'], 'email' => $user['email'], 'user_type' => 'superadmin', 'school_id' => null, 'name' => $user['name']];
+        if ($superadmin && password_verify($password, $superadmin['password'])) {
+            return [
+                'id' => $superadmin['id'], 
+                'email' => $superadmin['email'], 
+                'user_type' => 'superadmin', 
+                'school_id' => null,
+                'name' => $superadmin['name']
+            ];
         }
     } catch (Exception $e) {
-        error_log("Superadmin check failed: " . $e->getMessage());
+        error_log("Superadmin auth error: " . $e->getMessage());
     }
     
     // Check normale Users (schuladmin, lehrer)
@@ -202,36 +403,6 @@ function authenticateUser($email, $password) {
     }
     
     return false;
-}
-
-function loginUser($user) {
-    // Session regenerieren für Sicherheit
-    session_regenerate_id(true);
-    
-    $_SESSION['user_id'] = $user['id'];
-    $_SESSION['user_type'] = $user['user_type'];
-    $_SESSION['email'] = $user['email'];
-    $_SESSION['name'] = $user['name'];
-    if (isset($user['school_id'])) {
-        $_SESSION['school_id'] = $user['school_id'];
-    }
-    $_SESSION['login_time'] = time();
-}
-
-function logoutUser() {
-    // Session-Variablen löschen
-    $_SESSION = array();
-    
-    // Session-Cookie löschen
-    if (isset($_COOKIE[session_name()])) {
-        setcookie(session_name(), '', time() - 3600, '/');
-    }
-    
-    // Session zerstören
-    session_destroy();
-    
-    // Neue Session starten für Flash Messages
-    session_start();
 }
 
 function requireLogin() {
@@ -293,283 +464,58 @@ function requireValidSchoolLicense($schoolId) {
     return $school;
 }
 
-// Funktionen die möglicherweise fehlen - nur wenn nicht bereits definiert
-if (!function_exists('canCreateClass')) {
-    function canCreateClass($schoolId) {
-        $school = getSchoolById($schoolId);
-        if (!$school) return false;
-        
-        $db = getDB();
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM classes WHERE school_id = ? AND is_active = 1");
-        $stmt->execute([$schoolId]);
-        $currentCount = $stmt->fetch()['count'];
-        
-        return $currentCount < $school['max_classes'];
-    }
-}
+// Neue Sicherheitsfunktionen
 
-if (!function_exists('getClassStudentCount')) {
-    function getClassStudentCount($classId) {
-        $db = getDB();
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM students WHERE class_id = ? AND is_active = 1");
-        $stmt->execute([$classId]);
-        return $stmt->fetch()['count'];
-    }
-}
-
-if (!function_exists('canAddStudentToClass')) {
-    function canAddStudentToClass($classId) {
-        $db = getDB();
+/**
+ * Session-Informationen für Admin-Dashboard
+ */
+function getActiveSessionsForUser($userId) {
+    $db = getDB();
+    try {
         $stmt = $db->prepare("
-            SELECT s.max_students_per_class 
-            FROM classes c 
-            JOIN schools s ON c.school_id = s.id 
-            WHERE c.id = ?
+            SELECT id, ip_address, user_agent, created_at, expires_at,
+                   CASE WHEN id = ? THEN 1 ELSE 0 END as is_current
+            FROM user_sessions 
+            WHERE user_id = ? AND expires_at > NOW()
+            ORDER BY created_at DESC
         ");
-        $stmt->execute([$classId]);
-        $school = $stmt->fetch();
-        
-        if (!$school) return false;
-        
-        $currentStudents = getClassStudentCount($classId);
-        return $currentStudents < $school['max_students_per_class'];
+        $stmt->execute([session_id(), $userId]);
+        return $stmt->fetchAll();
+    } catch (Exception $e) {
+        error_log("Get sessions error: " . $e->getMessage());
+        return [];
     }
 }
 
-// Flash Message Funktionen - nur wenn nicht bereits definiert
-if (!function_exists('setFlashMessage')) {
-    function setFlashMessage($message, $type = 'info') {
-        $_SESSION['flash_message'] = $message;
-        $_SESSION['flash_type'] = $type;
+/**
+ * Bestimmte Session terminieren (außer der aktuellen)
+ */
+function terminateUserSession($sessionId, $userId) {
+    // Nicht die eigene Session löschen
+    if ($sessionId === session_id()) {
+        return false;
+    }
+    
+    $db = getDB();
+    try {
+        $stmt = $db->prepare("DELETE FROM user_sessions WHERE id = ? AND user_id = ?");
+        return $stmt->execute([$sessionId, $userId]);
+    } catch (Exception $e) {
+        error_log("Terminate session error: " . $e->getMessage());
+        return false;
     }
 }
 
-if (!function_exists('getFlashMessage')) {
-    function getFlashMessage() {
-        if (isset($_SESSION['flash_message'])) {
-            $message = $_SESSION['flash_message'];
-            $type = $_SESSION['flash_type'] ?? 'info';
-            
-            unset($_SESSION['flash_message']);
-            unset($_SESSION['flash_type']);
-            
-            return ['message' => $message, 'type' => $type];
-        }
-        
-        return null;
+/**
+ * Alle anderen Sessions eines Users beenden (außer der aktuellen)
+ */
+function terminateAllOtherUserSessions($userId) {
+    $db = getDB();
+    try {
+        $stmt = $db->prepare("DELETE FROM user_sessions WHERE user_id = ? AND id != ?");
+        return $stmt->execute([$userId, session_id()]);
+    } catch (Exception $e) {
+        error_log("Terminate all sessions error: " . $e->getMessage());
+        return false;
     }
 }
-
-// Weitere Hilfsfunktionen - nur wenn nicht bereits definiert
-if (!function_exists('escape')) {
-    function escape($string) {
-        if ($string === null || $string === '') {
-            return '';
-        }
-        return htmlspecialchars($string, ENT_QUOTES, 'UTF-8');
-    }
-}
-
-if (!function_exists('redirectWithMessage')) {
-    function redirectWithMessage($url, $message, $type = 'info') {
-        $_SESSION['flash_message'] = $message;
-        $_SESSION['flash_type'] = $type;
-        header('Location: ' . $url);
-        exit;
-    }
-}
-
-if (!function_exists('sendJsonResponse')) {
-    function sendJsonResponse($data, $status = 200) {
-        http_response_code($status);
-        header('Content-Type: application/json');
-        echo json_encode($data, JSON_UNESCAPED_UNICODE);
-        exit;
-    }
-}
-
-if (!function_exists('sendSuccessResponse')) {
-    function sendSuccessResponse($message = 'Erfolgreich', $data = null) {
-        $response = ['success' => true, 'message' => $message];
-        if ($data !== null) {
-            $response['data'] = $data;
-        }
-        sendJsonResponse($response);
-    }
-}
-
-if (!function_exists('sendErrorResponse')) {
-    function sendErrorResponse($message = 'Ein Fehler ist aufgetreten', $status = 400) {
-        sendJsonResponse(['success' => false, 'message' => $message], $status);
-    }
-}
-
-if (!function_exists('validateEmail')) {
-    function validateEmail($email) {
-        return filter_var($email, FILTER_VALIDATE_EMAIL) !== false;
-    }
-}
-
-if (!function_exists('formatDateForDB')) {
-    function formatDateForDB($dateString) {
-        if (empty($dateString)) {
-            return null;
-        }
-        
-        // Deutsche Datumsformate unterstützen
-        $formats = ['d.m.Y', 'd/m/Y', 'd-m-Y', 'Y-m-d'];
-        
-        foreach ($formats as $format) {
-            $date = DateTime::createFromFormat($format, $dateString);
-            if ($date) {
-                return $date->format('Y-m-d');
-            }
-        }
-        
-        return null;
-    }
-}
-
-if (!function_exists('formatDate')) {
-    function formatDate($date, $format = 'd.m.Y') {
-        if (empty($date) || $date === '0000-00-00') {
-            return '';
-        }
-        
-        $dateObj = DateTime::createFromFormat('Y-m-d', $date);
-        if (!$dateObj) {
-            $dateObj = new DateTime($date);
-        }
-        
-        return $dateObj->format($format);
-    }
-}
-
-// Weitere DB-Funktionen - nur wenn nicht bereits definiert
-if (!function_exists('createSchool')) {
-    function createSchool($data) {
-        $db = getDB();
-        
-        try {
-            $db->beginTransaction();
-            
-            // Insert school
-            $stmt = $db->prepare("
-                INSERT INTO schools (name, location, contact_phone, contact_email, contact_person, 
-                                   school_type, school_type_custom, license_until, max_classes, 
-                                   max_students_per_class, is_active, admin_email) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ");
-            
-            $stmt->execute([
-                $data['name'],
-                $data['location'], 
-                $data['contact_phone'],
-                $data['contact_email'],
-                $data['contact_person'],
-                $data['school_type'],
-                $data['school_type_custom'],
-                $data['license_until'],
-                $data['max_classes'],
-                $data['max_students_per_class'],
-                $data['is_active'],
-                $data['admin_email']
-            ]);
-            
-            $schoolId = $db->lastInsertId();
-            
-            // Create school admin user
-            $passwordHash = password_hash($data['admin_password'], PASSWORD_DEFAULT);
-            $stmt = $db->prepare("
-                INSERT INTO users (email, password_hash, user_type, name, school_id, first_login) 
-                VALUES (?, ?, 'schuladmin', ?, ?, 1)
-            ");
-            
-            $stmt->execute([
-                $data['admin_email'],
-                $passwordHash,
-                $data['admin_name'],
-                $schoolId
-            ]);
-            
-            $db->commit();
-            return $schoolId;
-            
-        } catch (Exception $e) {
-            $db->rollBack();
-            error_log("Error creating school: " . $e->getMessage());
-            return false;
-        }
-    }
-}
-
-if (!function_exists('updateSchool')) {
-    function updateSchool($id, $data) {
-        $db = getDB();
-        
-        try {
-            $db->beginTransaction();
-            
-            // Update school
-            $stmt = $db->prepare("
-                UPDATE schools 
-                SET name = ?, location = ?, contact_phone = ?, contact_email = ?, 
-                    contact_person = ?, school_type = ?, school_type_custom = ?, 
-                    license_until = ?, max_classes = ?, max_students_per_class = ?, 
-                    is_active = ?, admin_email = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-            ");
-            
-            $result = $stmt->execute([
-                $data['name'],
-                $data['location'],
-                $data['contact_phone'], 
-                $data['contact_email'],
-                $data['contact_person'],
-                $data['school_type'],
-                $data['school_type_custom'],
-                $data['license_until'],
-                $data['max_classes'],
-                $data['max_students_per_class'],
-                $data['is_active'],
-                $data['admin_email'],
-                $id
-            ]);
-            
-            // Update admin user
-            $stmt = $db->prepare("
-                UPDATE users 
-                SET email = ?, name = ?, updated_at = CURRENT_TIMESTAMP 
-                WHERE school_id = ? AND user_type = 'schuladmin'
-            ");
-            $stmt->execute([$data['admin_email'], $data['admin_name'], $id]);
-            
-            // Update password if provided
-            if (!empty($data['admin_password'])) {
-                $stmt = $db->prepare("
-                    UPDATE users 
-                    SET password_hash = ?, first_login = 1, updated_at = CURRENT_TIMESTAMP 
-                    WHERE school_id = ? AND user_type = 'schuladmin'
-                ");
-                $passwordHash = password_hash($data['admin_password'], PASSWORD_DEFAULT);
-                $stmt->execute([$passwordHash, $id]);
-            }
-            
-            $db->commit();
-            return $result;
-            
-        } catch (Exception $e) {
-            $db->rollBack();
-            error_log("Error updating school: " . $e->getMessage());
-            return false;
-        }
-    }
-}
-
-// Fehlerbehandlung für Development
-if (!defined('PRODUCTION')) {
-    ini_set('display_errors', 1);
-    ini_set('display_startup_errors', 1);
-    error_reporting(E_ALL);
-}
-?>

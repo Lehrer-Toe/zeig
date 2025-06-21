@@ -202,6 +202,20 @@ if (!function_exists('formatDate')) {
     }
 }
 
+if (!function_exists('getFlashMessage')) {
+    function getFlashMessage() {
+        if (isset($_SESSION['flash_message'])) {
+            $message = [
+                'message' => $_SESSION['flash_message'],
+                'type' => $_SESSION['flash_type'] ?? 'success'
+            ];
+            unset($_SESSION['flash_message'], $_SESSION['flash_type']);
+            return $message;
+        }
+        return null;
+    }
+}
+
 // Superadmin-Zugriff prüfen
 $user = requireSuperadmin();
 
@@ -741,6 +755,9 @@ if ($search) {
             <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
                 <a href="schule_anlegen.php" class="btn btn-primary">
                     ➕ Neue Schule
+                </a>
+                <a href="security_monitoring.php" class="btn btn-danger">
+                    🛡️ Sicherheits-Monitoring
                 </a>
                 <a href="schule_schuljahr.php" class="btn btn-danger" 
                    onclick="return confirm('⚠️ Möchten Sie wirklich zum Schuljahreswechsel? Dies löscht alle Klassen und Schüler!')">
