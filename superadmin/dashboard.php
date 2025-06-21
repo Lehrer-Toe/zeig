@@ -359,6 +359,8 @@ if ($search) {
 
         .btn-danger:hover {
             background: linear-gradient(135deg, #dc2626, #b91c1c);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
         }
 
         .btn-secondary {
@@ -653,6 +655,16 @@ if ($search) {
             .schools-grid {
                 grid-template-columns: 1fr;
             }
+            
+            /* Button-Gruppe auf Mobilgeräten */
+            .controls > div:last-child {
+                width: 100%;
+            }
+            
+            .controls > div:last-child > * {
+                flex: 1;
+                justify-content: center;
+            }
         }
     </style>
 </head>
@@ -726,9 +738,15 @@ if ($search) {
                 </div>
             </div>
             
-            <a href="schule_anlegen.php" class="btn btn-primary">
-                ➕ Neue Schule
-            </a>
+            <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+                <a href="schule_anlegen.php" class="btn btn-primary">
+                    ➕ Neue Schule
+                </a>
+                <a href="schule_schuljahr.php" class="btn btn-danger" 
+                   onclick="return confirm('⚠️ Möchten Sie wirklich zum Schuljahreswechsel? Dies löscht alle Klassen und Schüler!')">
+                    🎓 Neues Schuljahr
+                </a>
+            </div>
         </div>
 
         <!-- Schulenliste -->
