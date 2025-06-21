@@ -17,6 +17,36 @@ if (!$rating_id) {
 }
 
 try {
+    // Debug-Modus
+    if (isset($_GET['debug'])) {
+        $zip = new ZipArchive();
+        if ($zip->open($vorlage['dateipfad']) === TRUE) {
+            $content = $zip->getFromName('word/document.xml');
+            
+            // Suche nach [Stärken] und zeige den Kontext
+            if (preg_match('/(.{500})\[Stärken\](.{500})/s', $content, $matches)) {
+                header('Content-Type: text/html; charset=utf-8');
+                echo "<h2>XML-Struktur um [Stärken]:</h2>";
+                echo "<pre style='white-space: pre-wrap; word-wrap: break-word;'>";
+                echo htmlspecialchars($matches[0]);
+                echo "</pre>";
+                
+                // Zeige auch die gefundenen Run Properties
+                if (preg_match('/<w:r[^>]*>(<w:rPr>.*?<\/w:rPr>)?<w:t[^>]*>\[Stärken\]<\/w:t><\/w:r>/s', $content, $runMatch)) {
+                    echo "<h3>Gefundener Run:</h3>";
+                    echo "<pre>" . htmlspecialchars($runMatch[0]) . "</pre>";
+                    if (isset($runMatch[1])) {
+                        echo "<h3>Run Properties:</h3>";
+                        echo "<pre>" . htmlspecialchars($runMatch[1]) . "</pre>";
+                    }
+                }
+            } else {
+                echo "Platzhalter [Stärken] nicht gefunden.";
+            }
+            $zip->close();
+            exit;
+        }
+    }
     // Erweiterte Abfrage mit Prüfungsfach
     $stmt = $db->prepare("
         SELECT 
@@ -171,25 +201,17 @@ try {
         '[Bemerkung]' => htmlspecialchars($rating['comment'] ?? '', ENT_XML1, 'UTF-8'),
     ];
     
-    // Stärken formatieren mit Aufzählungszeichen
+    // Stärken formatieren - ROBUSTER ANSATZ
     if (!empty($rating['strengths_list'])) {
         $strengths = explode("\n", $rating['strengths_list']);
         $formattedStrengths = [];
-        $isFirst = true;
         foreach ($strengths as $strength) {
             if (trim($strength)) {
-                if ($isFirst) {
-                    // Erster Eintrag - direkt mit Aufzählungszeichen
-                    $formattedStrengths[] = '• ' . htmlspecialchars(trim($strength), ENT_XML1, 'UTF-8');
-                    $isFirst = false;
-                } else {
-                    // Weitere Einträge mit Line Break davor
-                    $formattedStrengths[] = '</w:t></w:r><w:r><w:br/></w:r><w:r><w:t>• ' . htmlspecialchars(trim($strength), ENT_XML1, 'UTF-8');
-                }
+                $formattedStrengths[] = '• ' . htmlspecialchars(trim($strength), ENT_XML1, 'UTF-8');
             }
         }
-        // Verbinde alle Einträge
-        $replacements['[Stärken]'] = implode('', $formattedStrengths);
+        // Markiere für spätere Verarbeitung
+        $replacements['[Stärken]'] = '###STRENGTHS###' . implode('###BREAK###', $formattedStrengths) . '###STRENGTHS_END###';
     } else {
         $replacements['[Stärken]'] = 'Keine besonderen Stärken ausgewählt';
     }
@@ -218,7 +240,7 @@ try {
             'exam_subject_short' => $rating['exam_subject_short'] ?? '',
             'final_grade' => $gradeText,
             'comment' => $rating['comment'] ?? '',
-            'strengths_list' => $replacements['[Stärken]'] ?? '',
+            'strengths_list' => isset($replacements['[Stärken]']) && strpos($replacements['[Stärken]'], '###STRENGTHS###') === false ? $replacements['[Stärken]'] : 'Stärken',
             'class_name' => $rating['class_name'] ?? '',
             'school_name' => $rating['school_name'] ?? '',
             'teacher_name' => $rating['teacher_name'] ?? '',
@@ -238,11 +260,69 @@ try {
             $content = $zip->getFromName($xmlFile);
             if ($content !== false) {
                 
+    // Platzhalter ersetzen
+    foreach ($xmlFiles as $xmlFile) {
+        if ($zip->locateName($xmlFile) !== false) {
+            $content = $zip->getFromName($xmlFile);
+            if ($content !== false) {
+                // Spezialbehandlung für [Stärken] - NEUER ROBUSTER ANSATZ
+                if (strpos($content, '[Stärken]') !== false && isset($replacements['[Stärken]']) && strpos($replacements['[Stärken]'], '###STRENGTHS###') !== false) {
+                    // Extrahiere die Stärken
+                    preg_match('/###STRENGTHS###(.*)###STRENGTHS_END###/', $replacements['[Stärken]'], $strengthsMatch);
+                    $strengthsList = explode('###BREAK###', $strengthsMatch[1]);
+                    
+                    // Versuche zuerst, den kompletten Absatz zu finden, der [Stärken] enthält
+                    if (preg_match('/<w:p[^>]*>(.*?)\[Stärken\](.*?)<\/w:p>/s', $content, $paragraphMatch)) {
+                        $originalParagraph = $paragraphMatch[0];
+                        $beforePlaceholder = $paragraphMatch[1];
+                        $afterPlaceholder = $paragraphMatch[2];
+                        
+                        // Extrahiere die Run-Properties aus dem Teil vor dem Platzhalter
+                        $runProperties = '';
+                        if (preg_match_all('/<w:rPr>(.*?)<\/w:rPr>/s', $beforePlaceholder, $rPrMatches)) {
+                            // Nimm die letzten Run-Properties
+                            $runProperties = '<w:rPr>' . end($rPrMatches[1]) . '</w:rPr>';
+                        }
+                        
+                        // Baue den neuen Absatz
+                        $newParagraph = '<w:p' . substr($originalParagraph, 4, strpos($originalParagraph, '>') - 4) . '>';
+                        
+                        // Füge den Teil vor [Stärken] ein (ohne das letzte w:t und w:r)
+                        $beforeClean = preg_replace('/<w:t[^>]*>\[Stärken\]$/', '', $beforePlaceholder);
+                        $beforeClean = preg_replace('/<w:r[^>]*>(?:<w:rPr>.*?<\/w:rPr>)?<w:t[^>]*>\[Stärken\]$/', '', $beforeClean);
+                        $newParagraph .= $beforeClean;
+                        
+                        // Füge die Stärken ein
+                        foreach ($strengthsList as $index => $strength) {
+                            if ($index > 0) {
+                                // Zeilenumbruch
+                                $newParagraph .= '<w:r><w:br/></w:r>';
+                            }
+                            $newParagraph .= '<w:r>' . $runProperties . '<w:t>' . $strength . '</w:t></w:r>';
+                        }
+                        
+                        // Füge den Teil nach [Stärken] ein
+                        $newParagraph .= $afterPlaceholder . '</w:p>';
+                        
+                        // Ersetze den Original-Absatz
+                        $content = str_replace($originalParagraph, $newParagraph, $content);
+                    } else {
+                        // Fallback: Einfache Ersetzung
+                        $simpleList = implode("\n", $strengthsList);
+                        $content = str_replace('[Stärken]', $simpleList, $content);
+                    }
+                }
+                
+                // Normale Ersetzung für alle anderen Platzhalter
                 foreach ($replacements as $placeholder => $value) {
+                    if ($placeholder == '[Stärken]' && strpos($value, '###STRENGTHS###') !== false) {
+                        continue; // Bereits behandelt
+                    }
+                    
                     // Einfache Ersetzung
                     $content = str_replace($placeholder, $value, $content);
                     
-                    // Regex für aufgeteilte Platzhalter (vereinfachte Version)
+                    // Regex für aufgeteilte Platzhalter
                     $pattern = '/' . preg_quote($placeholder[0], '/');
                     for ($i = 1; $i < strlen($placeholder) - 1; $i++) {
                         $pattern .= '(?:<[^>]+>)*' . preg_quote($placeholder[$i], '/');
@@ -254,6 +334,13 @@ try {
                         $content = preg_replace($pattern, $value, $content);
                     }
                 }
+                
+                // Inhalt zurückschreiben
+                $zip->deleteName($xmlFile);
+                $zip->addFromString($xmlFile, $content);
+            }
+        }
+    }
                 
                 // Inhalt zurückschreiben
                 $zip->deleteName($xmlFile);
