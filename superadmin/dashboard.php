@@ -756,8 +756,11 @@ if ($search) {
                 <a href="schule_anlegen.php" class="btn btn-primary">
                     ➕ Neue Schule
                 </a>
-                <a href="security_monitoring.php" class="btn btn-danger">
+                <a href="security-dashboard.php" class="btn btn-danger">
                     🛡️ Sicherheits-Monitoring
+                </a>
+                <a href="security_monitoring.php" class="btn btn-danger">
+                    🔐 Security 2
                 </a>
                 <a href="schule_schuljahr.php" class="btn btn-danger" 
                    onclick="return confirm('⚠️ Möchten Sie wirklich zum Schuljahreswechsel? Dies löscht alle Klassen und Schüler!')">

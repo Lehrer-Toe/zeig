@@ -30,6 +30,45 @@ define('SESSION_INACTIVITY_TIMEOUT', 1800); // 30 Minuten Inaktivität
 define('MAX_CONCURRENT_SESSIONS', 3); // Max. 3 gleichzeitige Sessions pro User
 define('PASSWORD_MIN_LENGTH', 8);
 
+// Basis Security Headers (korrigiert - ohne problematische Permissions-Policy Features)
+if (!headers_sent()) {
+    // Clickjacking-Schutz
+    header("X-Frame-Options: DENY");
+    
+    // MIME-Type Sniffing verhindern
+    header("X-Content-Type-Options: nosniff");
+    
+    // XSS-Filter für ältere Browser
+    header("X-XSS-Protection: 1; mode=block");
+    
+    // Referrer Policy
+    header("Referrer-Policy: strict-origin-when-cross-origin");
+    
+    // Entferne Server-Informationen
+    header_remove("X-Powered-By");
+    
+    // Korrigierte Permissions-Policy (ohne nicht unterstützte Features)
+    $permissions = [
+        "geolocation=()",
+        "microphone=()",
+        "camera=()",
+        "payment=()",
+        "usb=()",
+        "magnetometer=()",
+        "gyroscope=()",
+        "accelerometer=()",
+        "autoplay=()",
+        "encrypted-media=()",
+        "picture-in-picture=()",
+        "sync-xhr=(self)",
+        "fullscreen=(self)"
+    ];
+    header("Permissions-Policy: " . implode(', ', $permissions));
+    
+    // Einfache Content-Security-Policy
+    header("Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'self';");
+}
+
 // WICHTIG: db.php suchen und laden
 $dbLoaded = false;
 $possiblePaths = [
